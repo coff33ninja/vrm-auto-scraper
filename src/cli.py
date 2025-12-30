@@ -12,7 +12,12 @@ from crawler import CrawlerEngine
 from sources.base import BaseSource
 from sources.github import GitHubSource
 from sources.sketchfab import SketchfabSource
-from sources.vroid_hub import VRoidHubSource, VRoidHubOAuth, save_tokens, load_tokens
+from sources.vroid_hub import VRoidHubSource, VRoidHubOAuth
+from sources.vroid_hub import save_tokens as save_vroid_tokens
+from sources.vroid_hub import load_tokens as load_vroid_tokens
+from sources.deviantart import DeviantArtSource, DeviantArtOAuth
+from sources.deviantart import save_tokens as save_da_tokens
+from sources.deviantart import load_tokens as load_da_tokens
 from storage import MetadataStore
 
 app = typer.Typer(
@@ -38,6 +43,7 @@ def get_sources(
     include_vroid: bool = True,
     include_sketchfab: bool = True,
     include_github: bool = True,
+    include_deviantart: bool = True,
 ) -> list[BaseSource]:
     """Get configured source instances."""
     sources: list[BaseSource] = []
@@ -63,6 +69,16 @@ def get_sources(
         logger.info("Sketchfab source enabled")
     elif include_sketchfab:
         logger.warning("Sketchfab token not configured, skipping")
+    
+    if include_deviantart and config.has_deviantart_token():
+        sources.append(DeviantArtSource(
+            access_token=config.deviantart_access_token,
+            rate_limit_delay=config.rate_limit_delay,
+        ))
+        logger.info("DeviantArt source enabled")
+    elif include_deviantart:
+        if config.has_deviantart_credentials():
+            logger.warning("DeviantArt credentials found but no access token. Run 'deviantart-auth' to authenticate.")
     
     if include_github:
         sources.append(GitHubSource(
@@ -117,18 +133,21 @@ def crawl(
     include_vroid = True
     include_sketchfab = True
     include_github = True
+    include_deviantart = True
     
     if sources:
         source_list = [s.strip().lower() for s in sources.split(",")]
         include_vroid = "vroid" in source_list or "vroid_hub" in source_list
         include_sketchfab = "sketchfab" in source_list
         include_github = "github" in source_list
+        include_deviantart = "deviantart" in source_list or "da" in source_list
     
     # Get sources
     source_instances = get_sources(
         include_vroid=include_vroid,
         include_sketchfab=include_sketchfab,
         include_github=include_github,
+        include_deviantart=include_deviantart,
     )
     
     if not source_instances:
@@ -217,18 +236,21 @@ def crawl_continuous(
     include_vroid = True
     include_sketchfab = True
     include_github = True
+    include_deviantart = True
     
     if sources:
         source_list = [s.strip().lower() for s in sources.split(",")]
         include_vroid = "vroid" in source_list or "vroid_hub" in source_list
         include_sketchfab = "sketchfab" in source_list
         include_github = "github" in source_list
+        include_deviantart = "deviantart" in source_list or "da" in source_list
     
     # Get sources
     source_instances = get_sources(
         include_vroid=include_vroid,
         include_sketchfab=include_sketchfab,
         include_github=include_github,
+        include_deviantart=include_deviantart,
     )
     
     if not source_instances:
@@ -456,7 +478,7 @@ def vroid_auth(
         
         if save_to_file:
             token_path = config.data_dir / ".vroid_tokens.json"
-            save_tokens(tokens, token_path)
+            save_vroid_tokens(tokens, token_path)
             typer.echo(f"\nTokens also saved to: {token_path}")
         
         typer.echo(f"\nToken expires in: {tokens.get('expires_in', 'unknown')} seconds")
@@ -480,7 +502,7 @@ def vroid_refresh():
     # Try loading from file if not in env
     if not refresh_token:
         token_path = config.data_dir / ".vroid_tokens.json"
-        tokens = load_tokens(token_path)
+        tokens = load_vroid_tokens(token_path)
         if tokens:
             refresh_token = tokens.get("refresh_token", "")
     
@@ -502,7 +524,108 @@ def vroid_refresh():
         typer.echo(f"VROID_REFRESH_TOKEN={tokens.get('refresh_token', '')}")
         
         token_path = config.data_dir / ".vroid_tokens.json"
-        save_tokens(tokens, token_path)
+        save_vroid_tokens(tokens, token_path)
+        typer.echo(f"\nTokens saved to: {token_path}")
+        
+    except Exception as e:
+        typer.echo(f"\nError refreshing token: {e}")
+        raise typer.Exit(1)
+
+
+@app.command("deviantart-auth")
+def deviantart_auth(
+    port: int = typer.Option(
+        8911,
+        "--port", "-p",
+        help="Local port for OAuth callback server",
+    ),
+    save_to_file: bool = typer.Option(
+        True,
+        "--save/--no-save",
+        help="Save tokens to .deviantart_tokens.json",
+    ),
+):
+    """
+    Authenticate with DeviantArt using OAuth 2.0.
+    
+    Prerequisites:
+    1. Register your app at https://www.deviantart.com/developers/
+    2. Set DEVIANTART_CLIENT_ID and DEVIANTART_CLIENT_SECRET in your .env file
+    3. Set redirect URI to http://localhost:8911/callback in your app settings
+    """
+    if not config.has_deviantart_credentials():
+        typer.echo("Error: DEVIANTART_CLIENT_ID and DEVIANTART_CLIENT_SECRET must be set in .env")
+        typer.echo("\nTo get credentials:")
+        typer.echo("1. Go to https://www.deviantart.com/developers/")
+        typer.echo("2. Click 'Register Application'")
+        typer.echo("3. Set redirect URI to: http://localhost:8911/callback")
+        typer.echo("4. Copy the Client ID and Secret to your .env file")
+        raise typer.Exit(1)
+    
+    typer.echo("Starting DeviantArt OAuth authentication...")
+    typer.echo(f"Callback URL: http://localhost:{port}/callback")
+    typer.echo("")
+    
+    oauth = DeviantArtOAuth(
+        client_id=config.deviantart_client_id,
+        client_secret=config.deviantart_client_secret,
+        redirect_uri=f"http://localhost:{port}/callback",
+    )
+    
+    try:
+        tokens = oauth.authorize_interactive(port=port)
+        
+        typer.echo("\n✓ DeviantArt authorization successful!\n")
+        typer.echo("Add these to your .env file:\n")
+        typer.echo(f"DEVIANTART_ACCESS_TOKEN={tokens.get('access_token', '')}")
+        typer.echo(f"DEVIANTART_REFRESH_TOKEN={tokens.get('refresh_token', '')}")
+        
+        if save_to_file:
+            token_path = config.data_dir / ".deviantart_tokens.json"
+            save_da_tokens(tokens, token_path)
+            typer.echo(f"\nTokens also saved to: {token_path}")
+        
+        typer.echo(f"\nToken expires in: {tokens.get('expires_in', 'unknown')} seconds")
+        
+    except Exception as e:
+        typer.echo(f"\nError during authentication: {e}")
+        raise typer.Exit(1)
+
+
+@app.command("deviantart-refresh")
+def deviantart_refresh():
+    """Refresh DeviantArt access token using stored refresh token."""
+    if not config.has_deviantart_credentials():
+        typer.echo("Error: DEVIANTART_CLIENT_ID and DEVIANTART_CLIENT_SECRET must be set in .env")
+        raise typer.Exit(1)
+    
+    refresh_token = config.deviantart_refresh_token
+    
+    if not refresh_token:
+        token_path = config.data_dir / ".deviantart_tokens.json"
+        tokens = load_da_tokens(token_path)
+        if tokens:
+            refresh_token = tokens.get("refresh_token", "")
+    
+    if not refresh_token:
+        typer.echo("Error: No refresh token found. Run 'deviantart-auth' first.")
+        raise typer.Exit(1)
+    
+    oauth = DeviantArtOAuth(
+        client_id=config.deviantart_client_id,
+        client_secret=config.deviantart_client_secret,
+    )
+    
+    try:
+        tokens = oauth.refresh_token(refresh_token)
+        
+        typer.echo("✓ DeviantArt token refreshed successfully!\n")
+        typer.echo("Update your .env file:\n")
+        typer.echo(f"DEVIANTART_ACCESS_TOKEN={tokens.get('access_token', '')}")
+        typer.echo(f"DEVIANTART_REFRESH_TOKEN={tokens.get('refresh_token', '')}")
+        
+        token_path = config.data_dir / ".deviantart_tokens.json"
+        save_da_tokens(tokens, token_path)
         typer.echo(f"\nTokens saved to: {token_path}")
         
     except Exception as e:

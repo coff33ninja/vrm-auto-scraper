@@ -18,6 +18,12 @@ class Config:
         self.vroid_access_token: str = os.getenv("VROID_ACCESS_TOKEN", "")
         self.vroid_refresh_token: str = os.getenv("VROID_REFRESH_TOKEN", "")
         
+        # DeviantArt OAuth 2.0 credentials
+        self.deviantart_client_id: str = os.getenv("DEVIANTART_CLIENT_ID", "")
+        self.deviantart_client_secret: str = os.getenv("DEVIANTART_CLIENT_SECRET", "")
+        self.deviantart_access_token: str = os.getenv("DEVIANTART_ACCESS_TOKEN", "")
+        self.deviantart_refresh_token: str = os.getenv("DEVIANTART_REFRESH_TOKEN", "")
+        
         # Other API tokens
         self.sketchfab_api_token: str = os.getenv("SKETCHFAB_API_TOKEN", "")
         self.github_token: str = os.getenv("GITHUB_TOKEN", "")
@@ -33,6 +39,9 @@ class Config:
         
         # Auto-load VRoid tokens from file if not in env
         self._load_vroid_tokens_from_file()
+        
+        # Auto-load DeviantArt tokens from file if not in env
+        self._load_deviantart_tokens_from_file()
         
         # Ensure data directories exist
         self.raw_dir = self.data_dir / "raw"
@@ -61,6 +70,14 @@ class Config:
         """Check if GitHub token is configured."""
         return bool(self.github_token)
     
+    def has_deviantart_credentials(self) -> bool:
+        """Check if DeviantArt OAuth credentials are configured."""
+        return bool(self.deviantart_client_id and self.deviantart_client_secret)
+    
+    def has_deviantart_token(self) -> bool:
+        """Check if DeviantArt access token is available."""
+        return bool(self.deviantart_access_token)
+    
     def _load_vroid_tokens_from_file(self) -> None:
         """Load VRoid tokens from saved file if not in environment."""
         if self.vroid_access_token:
@@ -75,6 +92,23 @@ class Config:
                 tokens = json.load(f)
             self.vroid_access_token = tokens.get("access_token", "")
             self.vroid_refresh_token = tokens.get("refresh_token", "")
+        except (json.JSONDecodeError, IOError):
+            pass  # Ignore invalid token file
+    
+    def _load_deviantart_tokens_from_file(self) -> None:
+        """Load DeviantArt tokens from saved file if not in environment."""
+        if self.deviantart_access_token:
+            return  # Already have token from env
+        
+        token_path = self.data_dir / ".deviantart_tokens.json"
+        if not token_path.exists():
+            return
+        
+        try:
+            with open(token_path) as f:
+                tokens = json.load(f)
+            self.deviantart_access_token = tokens.get("access_token", "")
+            self.deviantart_refresh_token = tokens.get("refresh_token", "")
         except (json.JSONDecodeError, IOError):
             pass  # Ignore invalid token file
 

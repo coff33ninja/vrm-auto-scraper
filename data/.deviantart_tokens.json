@@ -1,0 +1,8 @@
+{
+  "access_token": "8f87135fd7b9f457fd6b1445c9c2912a9774d532b2d1c5fe77",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "bf54983335700a7b53e09fd27d0642958627077c",
+  "scope": "browse",
+  "status": "success"
+}
