@@ -161,103 +161,133 @@ try:
             output_node = nodes.new('ShaderNodeOutputMaterial')
             output_node.location = (400, 0)
         
-        # Collect all image texture nodes and update their images
-        tex_nodes = []
-        for node in nodes:
-            if node.type == 'TEX_IMAGE' and node.image:
-                # Replace with loaded image if available
-                if node.image.name in loaded_images:
-                    node.image = loaded_images[node.image.name]
-                tex_nodes.append(node)
+        # Get material name for texture matching
+        # e.g., "MAT_ZhuYuan_Body_1" -> look for textures with "Body" in name
+        mat_name_lower = mat.name.lower()
         
-        # Get material base name for texture matching
-        mat_base = mat.name.lower().replace('mat_', '').replace('_', '')
+        # Extract the part name from material (Body, Face, Weapon, Props, etc.)
+        # Common patterns: MAT_CharName_Part_N, Material_Part
+        part_keywords = []
+        for part in ['body', 'face', 'eye', 'hair', 'weapon', 'props', 'cloth', 'skin', 'head']:
+            if part in mat_name_lower:
+                part_keywords.append(part)
         
-        # Categorize textures by type based on naming conventions
-        diffuse_tex = None
-        normal_tex = None
-        metallic_tex = None
-        alpha_tex = None
-        roughness_tex = None
-        
-        for node in tex_nodes:
-            if not node.image:
-                continue
-            name_lower = node.image.name.lower()
-            
-            # Diffuse/Base Color (_D, _diffuse, _color, _albedo, _basecolor)
-            if diffuse_tex is None:
-                if '_d.' in name_lower or '_d_' in name_lower or name_lower.endswith('_d.png') or name_lower.endswith('_d.jpg'):
-                    diffuse_tex = node
-                elif any(x in name_lower for x in ['diffuse', 'color', 'albedo', 'basecolor', 'base_color']):
-                    diffuse_tex = node
-            
-            # Normal map (_N, _normal, _nrm)
-            if normal_tex is None:
-                if '_n.' in name_lower or '_n_' in name_lower or name_lower.endswith('_n.png') or name_lower.endswith('_n.jpg'):
-                    normal_tex = node
-                elif any(x in name_lower for x in ['normal', 'nrm', 'norm']):
-                    normal_tex = node
-            
-            # Metallic (_M, _metallic, _metal)
-            if metallic_tex is None:
-                if '_m.' in name_lower or '_m_' in name_lower or name_lower.endswith('_m.png') or name_lower.endswith('_m.jpg'):
-                    metallic_tex = node
-                elif any(x in name_lower for x in ['metallic', 'metal', 'metalness']):
-                    metallic_tex = node
-            
-            # Alpha/Opacity (_A, _alpha, _opacity)
-            if alpha_tex is None:
-                if '_a.' in name_lower or '_a_' in name_lower or name_lower.endswith('_a.png') or name_lower.endswith('_a.jpg'):
-                    alpha_tex = node
-                elif any(x in name_lower for x in ['alpha', 'opacity', 'transparent']):
-                    alpha_tex = node
-            
-            # Roughness (_R, _roughness, _rough)
-            if roughness_tex is None:
-                if '_r.' in name_lower or '_r_' in name_lower or name_lower.endswith('_r.png') or name_lower.endswith('_r.jpg'):
-                    roughness_tex = node
-                elif any(x in name_lower for x in ['roughness', 'rough']):
-                    roughness_tex = node
-        
-        # If no diffuse found by naming, use the first texture
-        if diffuse_tex is None and tex_nodes:
-            diffuse_tex = tex_nodes[0]
-        
-        # Skip materials with no textures
-        if not diffuse_tex:
-            continue
-        
-        # Clear all existing links
-        links.clear()
-        
-        # Create or find Principled BSDF
-        principled = None
-        for node in nodes:
-            if node.type == 'BSDF_PRINCIPLED':
-                principled = node
+        # Also try to extract map number (Map1, Map2, etc.)
+        map_num = None
+        for i in range(1, 10):
+            if f'_{i}' in mat_name_lower or f'map{i}' in mat_name_lower:
+                map_num = str(i)
                 break
         
-        if principled is None:
-            principled = nodes.new('ShaderNodeBsdfPrincipled')
-            principled.location = (100, 0)
+        # Search ALL loaded images for textures matching this material
+        diffuse_img = None
+        normal_img = None
+        metallic_img = None
+        alpha_img = None
         
-        # Position texture nodes
+        for img in bpy.data.images:
+            if not img.filepath and img.packed_file is None:
+                continue
+            
+            img_name_lower = img.name.lower()
+            
+            # Check if this image belongs to this material
+            # Must match at least one part keyword
+            matches_part = False
+            for keyword in part_keywords:
+                if keyword in img_name_lower:
+                    matches_part = True
+                    break
+            
+            if not matches_part:
+                continue
+            
+            # If we have a map number, prefer textures with matching map number
+            if map_num:
+                has_map_num = f'map{map_num}' in img_name_lower or f'_{map_num}_' in img_name_lower or img_name_lower.endswith(f'_{map_num}.png')
+                # Skip if texture has a different map number
+                for i in range(1, 10):
+                    if i != int(map_num) and (f'map{i}' in img_name_lower):
+                        has_map_num = False
+                        break
+            else:
+                has_map_num = True
+            
+            if not has_map_num:
+                continue
+            
+            # Categorize by texture type suffix
+            # Diffuse: _D, _diffuse, _color, _albedo, _basecolor
+            if diffuse_img is None:
+                if '_d.' in img_name_lower or img_name_lower.endswith('_d.png') or img_name_lower.endswith('_d.jpg'):
+                    diffuse_img = img
+                elif any(x in img_name_lower for x in ['diffuse', 'color', 'albedo', 'basecolor']):
+                    diffuse_img = img
+            
+            # Normal: _N, _normal, _nrm
+            if normal_img is None:
+                if '_n.' in img_name_lower or img_name_lower.endswith('_n.png') or img_name_lower.endswith('_n.jpg'):
+                    normal_img = img
+                elif any(x in img_name_lower for x in ['normal', 'nrm', 'norm']):
+                    normal_img = img
+            
+            # Metallic: _M, _metallic, _metal
+            if metallic_img is None:
+                if '_m.' in img_name_lower or img_name_lower.endswith('_m.png') or img_name_lower.endswith('_m.jpg'):
+                    metallic_img = img
+                elif any(x in img_name_lower for x in ['metallic', 'metal', 'metalness']):
+                    metallic_img = img
+            
+            # Alpha: _A, _alpha, _opacity
+            if alpha_img is None:
+                if '_a.' in img_name_lower or img_name_lower.endswith('_a.png') or img_name_lower.endswith('_a.jpg'):
+                    alpha_img = img
+                elif any(x in img_name_lower for x in ['alpha', 'opacity', 'transparent']):
+                    alpha_img = img
+        
+        # If no diffuse found by pattern, try to get from existing texture nodes
+        if diffuse_img is None:
+            for node in nodes:
+                if node.type == 'TEX_IMAGE' and node.image:
+                    # Update with loaded image if available
+                    if node.image.name in loaded_images:
+                        node.image = loaded_images[node.image.name]
+                    diffuse_img = node.image
+                    break
+        
+        # Skip materials with no textures
+        if not diffuse_img:
+            continue
+        
+        # Clear all existing nodes except output
+        for node in list(nodes):
+            if node != output_node:
+                nodes.remove(node)
+        
+        # Create Principled BSDF
+        principled = nodes.new('ShaderNodeBsdfPrincipled')
+        principled.location = (100, 0)
+        
+        # Position for texture nodes
         y_offset = 300
         
-        # Connect diffuse texture to Base Color
+        # Create and connect diffuse texture
+        diffuse_tex = nodes.new('ShaderNodeTexImage')
+        diffuse_tex.image = diffuse_img
         diffuse_tex.location = (-400, y_offset)
         links.new(diffuse_tex.outputs['Color'], principled.inputs['Base Color'])
         y_offset -= 300
         
-        # Handle alpha - check diffuse texture alpha channel or separate alpha texture
+        # Handle alpha
         has_alpha = False
-        if alpha_tex and alpha_tex.image:
+        if alpha_img:
+            alpha_tex = nodes.new('ShaderNodeTexImage')
+            alpha_tex.image = alpha_img
             alpha_tex.location = (-400, y_offset)
             links.new(alpha_tex.outputs['Color'], principled.inputs['Alpha'])
             has_alpha = True
             y_offset -= 300
-        elif diffuse_tex.image and diffuse_tex.image.channels == 4:
+        elif diffuse_img.channels == 4:
             links.new(diffuse_tex.outputs['Alpha'], principled.inputs['Alpha'])
             has_alpha = True
         
@@ -265,9 +295,11 @@ try:
             mat.blend_method = 'BLEND'
         
         # Connect normal map
-        if normal_tex and normal_tex.image:
-            normal_tex.location = (-400, y_offset)
+        if normal_img:
+            normal_tex = nodes.new('ShaderNodeTexImage')
+            normal_tex.image = normal_img
             normal_tex.image.colorspace_settings.name = 'Non-Color'
+            normal_tex.location = (-400, y_offset)
             normal_map = nodes.new('ShaderNodeNormalMap')
             normal_map.location = (-100, y_offset)
             links.new(normal_tex.outputs['Color'], normal_map.inputs['Color'])
@@ -275,30 +307,38 @@ try:
             y_offset -= 300
         
         # Connect metallic map
-        if metallic_tex and metallic_tex.image:
-            metallic_tex.location = (-400, y_offset)
+        if metallic_img:
+            metallic_tex = nodes.new('ShaderNodeTexImage')
+            metallic_tex.image = metallic_img
             metallic_tex.image.colorspace_settings.name = 'Non-Color'
+            metallic_tex.location = (-400, y_offset)
             links.new(metallic_tex.outputs['Color'], principled.inputs['Metallic'])
-            y_offset -= 300
-        
-        # Connect roughness map
-        if roughness_tex and roughness_tex.image:
-            roughness_tex.location = (-400, y_offset)
-            roughness_tex.image.colorspace_settings.name = 'Non-Color'
-            links.new(roughness_tex.outputs['Color'], principled.inputs['Roughness'])
             y_offset -= 300
         
         # Connect Principled BSDF to output
         links.new(principled.outputs['BSDF'], output_node.inputs['Surface'])
         
         converted_mats += 1
-        tex_info = f"D:{diffuse_tex.image.name if diffuse_tex else 'none'}"
-        if normal_tex: tex_info += f" N:{normal_tex.image.name}"
-        if metallic_tex: tex_info += f" M:{metallic_tex.image.name}"
-        if alpha_tex: tex_info += f" A:{alpha_tex.image.name}"
+        tex_info = f"D:{diffuse_img.name}"
+        if normal_img: tex_info += f" N:{normal_img.name}"
+        if metallic_img: tex_info += f" M:{metallic_img.name}"
+        if alpha_img: tex_info += f" A:{alpha_img.name}"
         print(f"  Rebuilt material: {mat.name} [{tex_info}]")
     
     print(f"Converted {converted_mats} materials to Principled BSDF")
+    
+    # Pack all images before export to ensure they're embedded
+    packed_count = 0
+    for img in bpy.data.images:
+        if img.filepath or img.packed_file:
+            try:
+                if not img.packed_file:
+                    img.pack()
+                packed_count += 1
+            except Exception as e:
+                print(f"  Could not pack image {img.name}: {e}")
+    
+    print(f"Packed {packed_count} images for embedding")
     
     # Export to GLB with textures embedded
     # Blender 5.0 changed the GLTF export API
@@ -315,6 +355,11 @@ try:
     )
     
     print(f"Export complete: {output_file}")
+    
+    # Verify export
+    if os.path.exists(output_file):
+        size_mb = os.path.getsize(output_file) / (1024 * 1024)
+        print(f"Output file size: {size_mb:.2f} MB")
     
 except Exception as e:
     print(f"Error: {e}")

@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
@@ -157,6 +156,64 @@ async function loadGLTF(url) {
     const gltf = await loader.loadAsync(url);
     
     currentModel = gltf.scene;
+    
+    // Debug: log model info
+    console.log('Loaded GLTF model:', url);
+    console.log('Scene children:', gltf.scene.children.length);
+    
+    // Check model scale and fix if needed
+    const box = new THREE.Box3().setFromObject(gltf.scene);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    console.log('Model size:', size, 'Max dimension:', maxDim);
+    
+    // If model is very small (< 0.01) or very large (> 100), normalize it
+    if (maxDim < 0.01 || maxDim > 100) {
+        const targetSize = 2; // Target 2 units tall
+        const scale = targetSize / maxDim;
+        gltf.scene.scale.multiplyScalar(scale);
+        console.log('Rescaled model by factor:', scale);
+    }
+    
+    // Process materials to ensure they render correctly
+    let materialCount = 0;
+    let textureCount = 0;
+    gltf.scene.traverse((child) => {
+        if (child.isMesh) {
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            materials.forEach(mat => {
+                if (mat) {
+                    materialCount++;
+                    // Ensure material is double-sided for better visibility
+                    mat.side = THREE.DoubleSide;
+                    
+                    // Check for textures
+                    if (mat.map) {
+                        textureCount++;
+                        // Ensure texture encoding is correct
+                        mat.map.colorSpace = THREE.SRGBColorSpace;
+                    }
+                    
+                    // If material has no map and is pink/magenta, it's missing textures
+                    if (!mat.map && mat.color) {
+                        const color = mat.color;
+                        // Check if it's the default magenta (missing texture indicator)
+                        if (color.r > 0.9 && color.g < 0.1 && color.b > 0.9) {
+                            console.warn('Material has missing texture (magenta):', mat.name);
+                            // Set to a neutral gray instead
+                            mat.color.setHex(0x888888);
+                        }
+                    }
+                    
+                    // Force material update
+                    mat.needsUpdate = true;
+                }
+            });
+        }
+    });
+    
+    console.log('Materials:', materialCount, 'Textures:', textureCount);
+    
     scene.add(gltf.scene);
     centerCameraOnModel(gltf.scene);
     return true;
