@@ -163,20 +163,25 @@ class DeviantArtSource(BaseSource):
         count = 0
         seen_ids: set[str] = set()
         
-        # Search terms for 3D models
+        # Search terms for 3D models (DeviantArt uses tags without spaces)
         search_terms = [
-            "VRM model",
-            "VRM avatar",
-            "3D model download",
-            "3D character free",
-            "VRChat avatar",
-            "MMD model",
-            "anime 3D model",
+            "3Dmodel",
+            "VRMmodel",
+            "VRChat",
+            "MMDmodel",
+            "3Dcharacter",
+            "3Davatar",
+            "anime3D",
+            "VRoid",
+            "3Danime",
+            "charactermodel",
+            "freemodel",
+            "downloadable3D",
         ]
         
         # Add user keywords
         if keywords:
-            search_terms = [" ".join(keywords)] + search_terms
+            search_terms = keywords + search_terms
         
         for term in search_terms:
             if count >= max_results:
