@@ -87,7 +87,9 @@ class RateLimitedClient:
         headers: Optional[dict] = None,
         params: Optional[dict] = None,
         json: Optional[dict] = None,
+        data: Optional[dict] = None,
         stream: bool = False,
+        allow_redirects: bool = True,
     ) -> requests.Response:
         """
         Make an HTTP request with rate limiting and retry logic.
@@ -107,7 +109,9 @@ class RateLimitedClient:
                     headers=headers,
                     params=params,
                     json=json,
+                    data=data,
                     stream=stream,
+                    allow_redirects=allow_redirects,
                     timeout=30,
                 )
                 
