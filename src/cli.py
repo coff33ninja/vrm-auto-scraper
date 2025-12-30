@@ -120,7 +120,7 @@ def crawl(
     
     if sources:
         source_list = [s.strip().lower() for s in sources.split(",")]
-        include_vroid = "vroid" in source_list
+        include_vroid = "vroid" in source_list or "vroid_hub" in source_list
         include_sketchfab = "sketchfab" in source_list
         include_github = "github" in source_list
     
@@ -220,7 +220,7 @@ def crawl_continuous(
     
     if sources:
         source_list = [s.strip().lower() for s in sources.split(",")]
-        include_vroid = "vroid" in source_list
+        include_vroid = "vroid" in source_list or "vroid_hub" in source_list
         include_sketchfab = "sketchfab" in source_list
         include_github = "github" in source_list
     
@@ -508,6 +508,32 @@ def vroid_refresh():
     except Exception as e:
         typer.echo(f"\nError refreshing token: {e}")
         raise typer.Exit(1)
+
+
+@app.command("web")
+def web_viewer(
+    host: str = typer.Option(
+        "localhost",
+        "--host", "-h",
+        help="Host to bind to",
+    ),
+    port: int = typer.Option(
+        8080,
+        "--port", "-p",
+        help="Port to listen on",
+    ),
+):
+    """
+    Start the web-based VRM model viewer.
+    
+    Opens a browser-based 3D viewer for your downloaded VRM models.
+    """
+    from webserver import run_server
+    
+    typer.echo(f"Starting VRM Viewer at http://{host}:{port}")
+    typer.echo("Press Ctrl+C to stop\n")
+    
+    run_server(host=host, port=port)
 
 
 if __name__ == "__main__":

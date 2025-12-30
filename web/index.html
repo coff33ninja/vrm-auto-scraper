@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VRM Model Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            display: flex;
+            height: 100vh;
+        }
+        .sidebar {
+            width: 320px;
+            background: #16213e;
+            overflow-y: auto;
+            border-right: 1px solid #0f3460;
+        }
+        .sidebar-header {
+            padding: 20px;
+            background: #0f3460;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .sidebar-header h1 {
+            font-size: 1.2rem;
+            margin-bottom: 10px;
+        }
+        .stats {
+            font-size: 0.85rem;
+            color: #aaa;
+        }
+        .model-list {
+            padding: 10px;
+        }
+        .model-card {
+            background: #1a1a2e;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            overflow: hidden;
+        }
+        .model-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .model-card.active {
+            border: 2px solid #e94560;
+        }
+        .model-thumb {
+            width: 100%;
+            height: 150px;
+            object-fit: cover;
+            background: #0f3460;
+        }
+        .model-info {
+            padding: 12px;
+        }
+        .model-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .model-artist {
+            font-size: 0.85rem;
+            color: #aaa;
+        }
+        .model-meta {
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 6px;
+        }
+        .viewer {
+            flex: 1;
+            position: relative;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+        }
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid #333;
+            border-top-color: #e94560;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.7);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+        }
+        .no-model {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #666;
+        }
+        .search-box {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #eee;
+            margin-top: 10px;
+        }
+        .search-box::placeholder {
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h1>🎭 VRM Model Library</h1>
+            <div class="stats" id="stats">Loading...</div>
+            <input type="text" class="search-box" id="search" placeholder="Search models...">
+        </div>
+        <div class="model-list" id="model-list">
+            <!-- Models loaded dynamically -->
+        </div>
+    </div>
+    <div class="viewer">
+        <div id="canvas-container"></div>
+        <div class="no-model" id="no-model">
+            <h2>Select a model to view</h2>
+            <p>Click on a model from the sidebar</p>
+        </div>
+        <div class="loading" id="loading" style="display: none;">
+            <div class="loading-spinner"></div>
+            <div>Loading model...</div>
+        </div>
+        <div class="controls" id="controls" style="display: none;">
+            🖱️ Drag to rotate | Scroll to zoom | Right-drag to pan
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+            "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.min.js"
+        }
+    }
+    </script>
+    <script type="module" src="viewer.js"></script>
+</body>
+</html>

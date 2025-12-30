@@ -250,18 +250,65 @@ class VRoidHubSource(BaseSource):
         """
         Search for downloadable VRM models on VRoid Hub.
         
-        Uses multiple endpoints:
-        1. Keyword search if keywords provided
-        2. Staff picks for curated models
-        3. User's hearted models
-        4. User's own uploaded models
+        Uses multiple endpoints and search strategies:
+        1. Keyword search with provided keywords
+        2. Keyword search with common VRM-related terms
+        3. Staff picks for curated models
+        4. User's hearted models
+        5. User's own uploaded models
         """
         count = 0
         seen_ids: set[str] = set()
         
-        # Search by keywords if provided
+        # Search by provided keywords
         if keywords:
             for model in self._search_models(keywords, max_results - count):
+                if count >= max_results:
+                    break
+                if model.source_model_id not in seen_ids and model.is_downloadable:
+                    seen_ids.add(model.source_model_id)
+                    yield model
+                    count += 1
+        
+        # Try additional search terms to find more models
+        additional_terms = [
+            ["free", "download"],
+            ["character"],
+            ["anime"],
+            ["girl"],
+            ["boy"],
+            ["cute"],
+            ["original"],
+            # HoYoverse games
+            ["genshin"],
+            ["genshin impact"],
+            ["honkai"],
+            ["honkai star rail"],
+            ["honkai impact"],
+            ["zenless zone zero"],
+            ["zzz"],
+            # Popular anime/games
+            ["vtuber"],
+            ["hololive"],
+            ["nijisanji"],
+            ["miku"],
+            ["hatsune"],
+            ["touhou"],
+            ["fate"],
+            ["blue archive"],
+            ["arknights"],
+            ["azur lane"],
+            ["uma musume"],
+            ["project sekai"],
+            ["nier"],
+            ["final fantasy"],
+            ["persona"],
+        ]
+        
+        for terms in additional_terms:
+            if count >= max_results:
+                break
+            for model in self._search_models(terms, max_results - count):
                 if count >= max_results:
                     break
                 if model.source_model_id not in seen_ids and model.is_downloadable:
@@ -329,12 +376,16 @@ class VRoidHubSource(BaseSource):
                 yield self._parse_model(model)
                 yielded += 1
             
-            # Check for next page
+            # Check for next page - handle relative URLs
             next_href = data.get("_links", {}).get("next", {}).get("href")
             if not next_href:
                 break
             
-            url = next_href
+            # Convert relative URL to absolute
+            if next_href.startswith("/"):
+                url = f"https://hub.vroid.com{next_href}"
+            else:
+                url = next_href
             params = {}
     
     def _get_staff_picks(self, max_count: int) -> Iterator[ModelInfo]:
@@ -367,7 +418,10 @@ class VRoidHubSource(BaseSource):
             if not next_href:
                 break
             
-            url = next_href
+            if next_href.startswith("/"):
+                url = f"https://hub.vroid.com{next_href}"
+            else:
+                url = next_href
             params = {}
     
     def _get_hearted_models(self, max_count: int) -> Iterator[ModelInfo]:
@@ -402,12 +456,16 @@ class VRoidHubSource(BaseSource):
                 yield self._parse_model(model)
                 yielded += 1
             
-            # Check for next page
+            # Check for next page - handle relative URLs
             next_href = data.get("_links", {}).get("next", {}).get("href")
             if not next_href:
                 break
             
-            url = next_href
+            # Convert relative URL to absolute
+            if next_href.startswith("/"):
+                url = f"https://hub.vroid.com{next_href}"
+            else:
+                url = next_href
             params = {}
 
     def _get_account_models(self, max_count: int) -> Iterator[ModelInfo]:
@@ -435,12 +493,16 @@ class VRoidHubSource(BaseSource):
                 yield self._parse_model(model)
                 yielded += 1
             
-            # Check for next page
+            # Check for next page - handle relative URLs
             next_href = data.get("_links", {}).get("next", {}).get("href")
             if not next_href:
                 break
             
-            url = next_href
+            # Convert relative URL to absolute
+            if next_href.startswith("/"):
+                url = f"https://hub.vroid.com{next_href}"
+            else:
+                url = next_href
             params = {}
     
     def _parse_model(self, model: dict) -> ModelInfo:

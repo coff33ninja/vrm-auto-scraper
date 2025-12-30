@@ -1,6 +1,6 @@
 """Sketchfab source implementation."""
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator
 
 from .base import BaseSource, ModelInfo, RateLimitedClient
 
@@ -37,30 +37,73 @@ class SketchfabSource(BaseSource):
     def get_source_name(self) -> str:
         return "sketchfab"
     
+    # Extended search terms for finding more avatar models
+    SEARCH_TERMS = [
+        ["vrm", "avatar"],
+        ["vroid", "avatar"],
+        ["vrchat", "avatar"],
+        ["anime", "character"],
+        ["genshin", "impact"],
+        ["honkai", "star rail"],
+        ["zenless", "zone zero"],
+        ["hololive", "vtuber"],
+        ["nijisanji"],
+        ["miku", "hatsune"],
+        ["touhou"],
+        ["fate", "grand order"],
+        ["blue archive"],
+        ["arknights"],
+        ["azur lane"],
+        ["nier", "automata"],
+        ["final fantasy"],
+        ["persona"],
+        ["anime", "girl"],
+        ["anime", "boy"],
+    ]
+    
     def search(self, keywords: list[str], max_results: int) -> Iterator[ModelInfo]:
         """
         Search for downloadable models on Sketchfab.
         
         Filters by:
         - downloadable=true
-        - Free Creative Commons licenses
-        - VRM/VRoid related tags if keywords provided
+        - Free licenses (CC or standard)
+        - Multiple search terms for broader coverage
         """
-        # Build search query
-        search_terms = keywords if keywords else ["vrm", "vroid", "avatar"]
-        query = " ".join(search_terms)
-        
-        url = f"{self.API_BASE}/search"
-        params = {
-            "type": "models",
-            "q": query,
-            "downloadable": "true",
-            "count": min(max_results, 24),  # API max is 24 per page
-        }
-        
+        seen_ids: set[str] = set()
         count = 0
         
-        while count < max_results:
+        # Start with provided keywords
+        search_queries = [keywords] if keywords else []
+        search_queries.extend(self.SEARCH_TERMS)
+        
+        for terms in search_queries:
+            if count >= max_results:
+                break
+            
+            query = " ".join(terms)
+            url = f"{self.API_BASE}/search"
+            params = {
+                "type": "models",
+                "q": query,
+                "downloadable": "true",
+                "count": min(max_results - count, 24),
+            }
+            
+            # Get results for this query
+            for model in self._search_query(url, params, max_results - count):
+                if count >= max_results:
+                    break
+                if model.source_model_id not in seen_ids:
+                    seen_ids.add(model.source_model_id)
+                    yield model
+                    count += 1
+    
+    def _search_query(self, url: str, params: dict, max_count: int) -> Iterator[ModelInfo]:
+        """Execute a single search query with pagination."""
+        count = 0
+        
+        while count < max_count:
             response = self.client.get(url, headers=self.headers, params=params)
             
             if response.status_code != 200:
@@ -70,7 +113,7 @@ class SketchfabSource(BaseSource):
             results = data.get("results", [])
             
             for item in results:
-                if count >= max_results:
+                if count >= max_count:
                     break
                 
                 model = self._parse_model(item)
@@ -92,9 +135,20 @@ class SketchfabSource(BaseSource):
         license_info = item.get("license", {}) or {}
         user = item.get("user", {}) or {}
         
-        # Check if license is free
+        # Check if license is free (CC licenses or no license restriction)
         license_slug = license_info.get("slug", "")
-        is_free_license = license_slug in self.FREE_LICENSES
+        is_free_license = license_slug in self.FREE_LICENSES or not license_slug
+        
+        # Get thumbnail
+        thumbnails = item.get("thumbnails", {}) or {}
+        images = thumbnails.get("images", []) or []
+        thumbnail_url = None
+        for img in images:
+            if img.get("width", 0) >= 200:
+                thumbnail_url = img.get("url")
+                break
+        if not thumbnail_url and images:
+            thumbnail_url = images[0].get("url")
         
         return ModelInfo(
             source_model_id=model_id,
@@ -102,8 +156,9 @@ class SketchfabSource(BaseSource):
             artist=user.get("displayName", "") or user.get("username", ""),
             source_url=item.get("viewerUrl", f"https://sketchfab.com/3d-models/{model_id}"),
             is_downloadable=item.get("isDownloadable", False) and is_free_license,
-            license=license_info.get("label", ""),
-            license_url=license_info.get("url", ""),
+            license=license_info.get("label", "Sketchfab Standard"),
+            license_url=license_info.get("url", "https://sketchfab.com/licenses"),
+            thumbnail_url=thumbnail_url,
         )
     
     def download(self, model: ModelInfo, output_dir: Path) -> Path:
@@ -112,7 +167,7 @@ class SketchfabSource(BaseSource):
         
         Flow:
         1. GET /models/{uid}/download to get download URLs
-        2. Download the GLB/GLTF archive
+        2. Download the GLB/GLTF archive (without auth header for S3)
         """
         # Get download info
         download_url = f"{self.API_BASE}/models/{model.source_model_id}/download"
@@ -135,4 +190,5 @@ class SketchfabSource(BaseSource):
             raise ValueError(f"No download URL found for model {model.source_model_id}")
         
         output_path = output_dir / f"sketchfab_{model.source_model_id}{ext}"
-        return self.client.download_file(file_url, output_path, headers=self.headers)
+        # Don't pass auth headers to S3 presigned URL
+        return self.client.download_file(file_url, output_path)
