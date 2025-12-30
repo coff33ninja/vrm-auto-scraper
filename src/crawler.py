@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import requests
+
 from archive import ArchiveHandler, ProcessedFile
 from sources.base import BaseSource, ModelInfo
 from storage import MetadataStore, ModelRecord
@@ -39,12 +41,15 @@ class CrawlerEngine:
         store: MetadataStore,
         archive_handler: ArchiveHandler,
         raw_dir: Path,
+        thumbnails_dir: Optional[Path] = None,
     ):
         self.sources = sources
         self.store = store
         self.archive_handler = archive_handler
         self.raw_dir = raw_dir
         self.raw_dir.mkdir(parents=True, exist_ok=True)
+        self.thumbnails_dir = thumbnails_dir or (raw_dir.parent / "thumbnails")
+        self.thumbnails_dir.mkdir(parents=True, exist_ok=True)
     
     def crawl(
         self,
@@ -159,6 +164,8 @@ class CrawlerEngine:
             processed.size_bytes = actual_size
         
         # Create metadata record
+        thumbnail_path = self._download_thumbnail(model, source_name)
+        
         record = ModelRecord(
             source=source_name,
             source_model_id=model.source_model_id,
@@ -167,6 +174,7 @@ class CrawlerEngine:
             source_url=model.source_url,
             license=model.license,
             license_url=model.license_url,
+            thumbnail_path=thumbnail_path,
             acquired_at=datetime.now(timezone.utc).isoformat(),
             file_path=str(processed.primary_path),
             file_type=processed.file_type,
@@ -186,6 +194,7 @@ class CrawlerEngine:
                     source_url=model.source_url,
                     license=model.license,
                     license_url=model.license_url,
+                    thumbnail_path=thumbnail_path,
                     acquired_at=datetime.now(timezone.utc).isoformat(),
                     file_path=str(vrm_path),
                     file_type="vrm",
@@ -195,3 +204,35 @@ class CrawlerEngine:
                 self.store.add(additional_record)
         
         return record
+    
+    def _download_thumbnail(self, model: ModelInfo, source_name: str) -> Optional[str]:
+        """Download model thumbnail if available."""
+        if not model.thumbnail_url:
+            return None
+        
+        try:
+            # Determine file extension from URL
+            ext = ".png"
+            if ".jpg" in model.thumbnail_url or ".jpeg" in model.thumbnail_url:
+                ext = ".jpg"
+            elif ".webp" in model.thumbnail_url:
+                ext = ".webp"
+            
+            thumb_dir = self.thumbnails_dir / source_name
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            thumb_path = thumb_dir / f"{model.source_model_id}{ext}"
+            
+            # Skip if already downloaded
+            if thumb_path.exists():
+                return str(thumb_path)
+            
+            response = requests.get(model.thumbnail_url, timeout=30)
+            response.raise_for_status()
+            
+            thumb_path.write_bytes(response.content)
+            logger.debug(f"Downloaded thumbnail for {model.name}")
+            return str(thumb_path)
+            
+        except Exception as e:
+            logger.warning(f"Failed to download thumbnail for {model.name}: {e}")
+            return None

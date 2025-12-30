@@ -20,6 +20,7 @@ class ModelRecord:
     artist: str = ""
     license: Optional[str] = None
     license_url: Optional[str] = None
+    thumbnail_path: Optional[str] = None
     notes: Optional[dict] = None
     id: Optional[int] = None
     
@@ -42,6 +43,7 @@ class ModelRecord:
             source_url=data["source_url"],
             license=data.get("license"),
             license_url=data.get("license_url"),
+            thumbnail_path=data.get("thumbnail_path"),
             acquired_at=data["acquired_at"],
             file_path=data["file_path"],
             file_type=data["file_type"],
@@ -84,6 +86,7 @@ class MetadataStore:
                 source_url TEXT NOT NULL,
                 license TEXT,
                 license_url TEXT,
+                thumbnail_path TEXT,
                 acquired_at TEXT NOT NULL,
                 file_path TEXT NOT NULL,
                 file_type TEXT NOT NULL,
@@ -95,6 +98,11 @@ class MetadataStore:
         con.execute("CREATE INDEX IF NOT EXISTS idx_source ON models(source)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_file_type ON models(file_type)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_acquired_at ON models(acquired_at)")
+        # Add thumbnail_path column if it doesn't exist (migration)
+        try:
+            con.execute("ALTER TABLE models ADD COLUMN thumbnail_path TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         con.commit()
     
     def add(self, record: ModelRecord) -> int:
@@ -103,9 +111,9 @@ class MetadataStore:
         cursor = con.execute("""
             INSERT INTO models
             (source, source_model_id, name, artist, source_url,
-             license, license_url, acquired_at, file_path,
+             license, license_url, thumbnail_path, acquired_at, file_path,
              file_type, size_bytes, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record.source,
             record.source_model_id,
@@ -114,6 +122,7 @@ class MetadataStore:
             record.source_url,
             record.license,
             record.license_url,
+            record.thumbnail_path,
             record.acquired_at,
             record.file_path,
             record.file_type,
@@ -172,6 +181,7 @@ class MetadataStore:
             source_url=row["source_url"],
             license=row["license"],
             license_url=row["license_url"],
+            thumbnail_path=row.get("thumbnail_path"),
             acquired_at=row["acquired_at"],
             file_path=row["file_path"],
             file_type=row["file_type"],

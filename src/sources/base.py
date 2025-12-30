@@ -19,6 +19,7 @@ class ModelInfo:
     license: Optional[str] = None
     license_url: Optional[str] = None
     download_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
 
 
 class BaseSource(ABC):

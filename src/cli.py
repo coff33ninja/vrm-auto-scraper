@@ -1,5 +1,6 @@
 """CLI interface for VRM Auto-Scraper."""
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -171,6 +172,123 @@ def crawl(
             typer.echo(f"  - {error}")
         if len(result.errors) > 10:
             typer.echo(f"  ... and {len(result.errors) - 10} more")
+
+
+@app.command("crawl-continuous")
+def crawl_continuous(
+    keywords: Optional[str] = typer.Option(
+        None,
+        "--keywords", "-k",
+        help="Comma-separated search keywords",
+    ),
+    batch_size: int = typer.Option(
+        50,
+        "--batch", "-b",
+        help="Models to download per batch",
+    ),
+    interval: int = typer.Option(
+        300,
+        "--interval", "-i",
+        help="Seconds between crawl batches (default: 5 minutes)",
+    ),
+    sources: Optional[str] = typer.Option(
+        None,
+        "--sources", "-s",
+        help="Comma-separated sources: vroid,sketchfab,github",
+    ),
+    max_total: Optional[int] = typer.Option(
+        None,
+        "--max-total",
+        help="Stop after downloading this many models total (default: unlimited)",
+    ),
+):
+    """
+    Continuously crawl sources, downloading new models as they appear.
+    
+    Runs in a loop, checking for new models at the specified interval.
+    Press Ctrl+C to stop.
+    """
+    # Parse keywords
+    keyword_list = []
+    if keywords:
+        keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    
+    # Parse sources
+    include_vroid = True
+    include_sketchfab = True
+    include_github = True
+    
+    if sources:
+        source_list = [s.strip().lower() for s in sources.split(",")]
+        include_vroid = "vroid" in source_list
+        include_sketchfab = "sketchfab" in source_list
+        include_github = "github" in source_list
+    
+    # Get sources
+    source_instances = get_sources(
+        include_vroid=include_vroid,
+        include_sketchfab=include_sketchfab,
+        include_github=include_github,
+    )
+    
+    if not source_instances:
+        typer.echo("No sources available. Check your API tokens in .env file.")
+        raise typer.Exit(1)
+    
+    # Initialize components
+    config.ensure_dirs()
+    store = get_store()
+    archive_handler = ArchiveHandler(config.extracted_dir)
+    
+    crawler = CrawlerEngine(
+        sources=source_instances,
+        store=store,
+        archive_handler=archive_handler,
+        raw_dir=config.raw_dir,
+    )
+    
+    typer.echo(f"Starting continuous crawl with {len(source_instances)} source(s)...")
+    typer.echo(f"Keywords: {keyword_list or ['vrm', 'vroid', 'avatar']}")
+    typer.echo(f"Batch size: {batch_size}, Interval: {interval}s")
+    if max_total:
+        typer.echo(f"Will stop after {max_total} total downloads")
+    typer.echo("Press Ctrl+C to stop.\n")
+    
+    total_downloaded = 0
+    batch_num = 0
+    
+    try:
+        while True:
+            batch_num += 1
+            typer.echo(f"\n=== Batch {batch_num} ===")
+            
+            result = crawler.crawl(
+                keywords=keyword_list,
+                max_per_source=batch_size,
+                skip_existing=True,
+            )
+            
+            total_downloaded += result.downloaded
+            
+            typer.echo(f"Batch: +{result.downloaded} downloaded, {result.skipped} skipped, {result.failed} failed")
+            typer.echo(f"Total downloaded: {total_downloaded}")
+            
+            # Check if we've hit the max
+            if max_total and total_downloaded >= max_total:
+                typer.echo(f"\nReached max total ({max_total}). Stopping.")
+                break
+            
+            # Wait for next batch
+            typer.echo(f"Waiting {interval}s until next batch...")
+            time.sleep(interval)
+            
+    except KeyboardInterrupt:
+        typer.echo("\n\nStopping continuous crawl...")
+    finally:
+        store.close()
+        typer.echo("\n--- Final Stats ---")
+        typer.echo(f"Total batches: {batch_num}")
+        typer.echo(f"Total downloaded: {total_downloaded}")
 
 
 @app.command("list")

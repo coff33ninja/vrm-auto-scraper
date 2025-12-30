@@ -28,6 +28,7 @@ htmlcov/
 # Data (large files)
 data/raw/
 data/extracted/
+data/thumbnails/
 data/models.db
 *.vrm
 *.glb

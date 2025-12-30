@@ -470,6 +470,18 @@ class VRoidHubSource(BaseSource):
         else:
             source_url = f"https://hub.vroid.com/characters/{model_id}"
         
+        # Extract thumbnail URL (portrait image)
+        thumbnail_url = None
+        portrait = model.get("portrait_image", {})
+        if portrait:
+            # Prefer w300 size, fallback to original
+            w300 = portrait.get("w300", {})
+            if w300:
+                thumbnail_url = w300.get("url")
+            if not thumbnail_url:
+                original = portrait.get("original", {})
+                thumbnail_url = original.get("url")
+        
         return ModelInfo(
             source_model_id=str(model_id),
             name=character.get("name", "") or model.get("name", f"Model {model_id}"),
@@ -478,6 +490,7 @@ class VRoidHubSource(BaseSource):
             is_downloadable=model.get("is_downloadable", False),
             license=license_str,
             license_url="https://hub.vroid.com/license",
+            thumbnail_url=thumbnail_url,
         )
     
     def get_model_details(self, model_id: str) -> dict:
