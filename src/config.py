@@ -1,4 +1,5 @@
 """Configuration management for VRM Auto-Scraper."""
+import json
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -29,6 +30,14 @@ class Config:
         self.raw_dir = self.data_dir / "raw"
         self.extracted_dir = self.data_dir / "extracted"
         self.db_path = self.data_dir / "models.db"
+        
+        # Auto-load VRoid tokens from file if not in env
+        self._load_vroid_tokens_from_file()
+        
+        # Ensure data directories exist
+        self.raw_dir = self.data_dir / "raw"
+        self.extracted_dir = self.data_dir / "extracted"
+        self.db_path = self.data_dir / "models.db"
     
     def ensure_dirs(self) -> None:
         """Create data directories if they don't exist."""
@@ -51,6 +60,23 @@ class Config:
     def has_github_token(self) -> bool:
         """Check if GitHub token is configured."""
         return bool(self.github_token)
+    
+    def _load_vroid_tokens_from_file(self) -> None:
+        """Load VRoid tokens from saved file if not in environment."""
+        if self.vroid_access_token:
+            return  # Already have token from env
+        
+        token_path = self.data_dir / ".vroid_tokens.json"
+        if not token_path.exists():
+            return
+        
+        try:
+            with open(token_path) as f:
+                tokens = json.load(f)
+            self.vroid_access_token = tokens.get("access_token", "")
+            self.vroid_refresh_token = tokens.get("refresh_token", "")
+        except (json.JSONDecodeError, IOError):
+            pass  # Ignore invalid token file
 
 
 # Global config instance
