@@ -243,6 +243,10 @@ class DeviantArtSource(BaseSource):
         # Check if downloadable
         is_downloadable = deviation.get("is_downloadable", False)
         
+        # Skip if not downloadable
+        if not is_downloadable:
+            return None
+        
         # Get content info for file type detection
         content = deviation.get("content", {})
         file_size = content.get("filesize", 0)
@@ -258,16 +262,27 @@ class DeviantArtSource(BaseSource):
         # Get author info
         author = deviation.get("author", {})
         
+        # Check category path for 3D content
+        category_path = deviation.get("category_path", "")
+        title = deviation.get("title", "").lower()
+        
+        # Filter for likely 3D model content
+        is_3d_content = (
+            "3d" in category_path.lower() or
+            "resources" in category_path.lower() or
+            any(kw in title for kw in ["vrm", "fbx", "blend", "model", "mmd", "pmx", "download"])
+        )
+        
         # Log file size if available for debugging
         if file_size > 0:
-            logger.debug(f"Deviation {deviation_id} has file size: {file_size}")
+            logger.debug(f"Deviation {deviation_id} has file size: {file_size}, category: {category_path}")
         
         return ModelInfo(
             source_model_id=str(deviation_id),
             name=deviation.get("title", f"Deviation {deviation_id}"),
             artist=author.get("username", "Unknown"),
             source_url=deviation.get("url", f"https://www.deviantart.com/deviation/{deviation_id}"),
-            is_downloadable=is_downloadable,
+            is_downloadable=is_downloadable and is_3d_content,
             license="DeviantArt Terms",
             license_url="https://www.deviantart.com/about/policy/submission/",
             thumbnail_url=thumbnail_url,
@@ -289,7 +304,14 @@ class DeviantArtSource(BaseSource):
             raise ValueError(f"No download URL for deviation {model.source_model_id}")
         
         # Determine file extension
-        ext = Path(filename).suffix or ".zip"
+        ext = Path(filename).suffix.lower() or ".zip"
+        
+        # Skip image files - we want 3D models
+        image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"}
+        if ext in image_extensions:
+            logger.info(f"Skipping image file: {filename}")
+            raise ValueError(f"File is an image ({ext}), not a 3D model")
+        
         output_path = output_dir / f"deviantart_{model.source_model_id}{ext}"
         
         logger.info(f"Downloading from DeviantArt: {filename}")

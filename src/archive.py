@@ -1,23 +1,43 @@
 """Archive handling for downloaded VRM models and related files."""
 import json
+import logging
+import shutil
+import subprocess
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
-# Try to import rarfile for RAR support
-try:
-    import rarfile
-    HAS_RAR_SUPPORT = True
-except ImportError:
-    HAS_RAR_SUPPORT = False
+logger = logging.getLogger(__name__)
+
+# Common 7-Zip installation paths on Windows
+SEVEN_ZIP_PATHS = [
+    r"C:\Program Files\7-Zip\7z.exe",
+    r"C:\Program Files (x86)\7-Zip\7z.exe",
+]
+
+
+def find_7zip() -> str | None:
+    """Find 7-Zip executable on the system."""
+    # Check if 7z is in PATH
+    if shutil.which("7z"):
+        return "7z"
+    
+    # Check common installation paths
+    for path in SEVEN_ZIP_PATHS:
+        if Path(path).exists():
+            return path
+    
+    return None
+
+
+SEVEN_ZIP_PATH = find_7zip()
 
 
 @dataclass
 class ProcessedFile:
     """Result of processing a downloaded file."""
     primary_path: Path
-    file_type: str  # "vrm", "glb", "zip", or other extension
+    file_type: str  # "vrm", "glb", "zip", "rar", or other extension
     size_bytes: int
     notes: dict = field(default_factory=dict)
     additional_vrms: list[Path] = field(default_factory=list)
@@ -29,6 +49,11 @@ class ArchiveHandler:
     def __init__(self, extract_base_dir: Path):
         self.extract_base_dir = extract_base_dir
         self.extract_base_dir.mkdir(parents=True, exist_ok=True)
+        
+        if SEVEN_ZIP_PATH:
+            logger.info(f"7-Zip found at: {SEVEN_ZIP_PATH}")
+        else:
+            logger.warning("7-Zip not found. RAR extraction will not work.")
     
     def process(self, file_path: Path, source: str, model_id: str) -> ProcessedFile:
         """
@@ -43,12 +68,16 @@ class ArchiveHandler:
             ProcessedFile with primary path, type, size, and notes
         """
         ext = file_path.suffix.lower()
+        extract_dir = self.extract_base_dir / source / model_id
         
         if ext == ".vrm":
             return self._process_vrm(file_path)
         elif ext == ".zip":
-            extract_dir = self.extract_base_dir / source / model_id
-            return self._process_zip(file_path, extract_dir)
+            return self._process_archive(file_path, extract_dir, "zip")
+        elif ext == ".rar":
+            return self._process_archive(file_path, extract_dir, "rar")
+        elif ext == ".7z":
+            return self._process_archive(file_path, extract_dir, "7z")
         elif ext == ".glb":
             return self._process_glb(file_path)
         else:
@@ -63,24 +92,99 @@ class ArchiveHandler:
             notes={},
         )
     
-    def _process_zip(self, zip_path: Path, extract_dir: Path) -> ProcessedFile:
+    def _extract_with_7zip(self, archive_path: Path, extract_dir: Path) -> tuple[bool, list[str]]:
         """
-        Extract ZIP archive and detect VRM files and metadata.
+        Extract archive using 7-Zip.
         
+        Returns:
+            Tuple of (success, list of extracted files)
+        """
+        if not SEVEN_ZIP_PATH:
+            return False, []
+        
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            # Run 7z to extract: x = extract with full paths, -o = output dir, -y = yes to all
+            result = subprocess.run(
+                [SEVEN_ZIP_PATH, "x", str(archive_path), f"-o{extract_dir}", "-y"],
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"7-Zip extraction failed: {result.stderr}")
+                return False, []
+            
+            # List extracted files
+            extracted_files = []
+            for f in extract_dir.rglob("*"):
+                if f.is_file():
+                    try:
+                        rel_path = str(f.relative_to(extract_dir))
+                        extracted_files.append(rel_path)
+                    except ValueError:
+                        pass
+            
+            return True, extracted_files
+            
+        except subprocess.TimeoutExpired:
+            logger.error(f"7-Zip extraction timed out for {archive_path}")
+            return False, []
+        except Exception as e:
+            logger.error(f"7-Zip extraction error: {e}")
+            return False, []
+    
+    def _extract_with_zipfile(self, zip_path: Path, extract_dir: Path) -> tuple[bool, list[str]]:
+        """Extract ZIP using Python's zipfile module as fallback."""
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(extract_dir)
+                return True, zf.namelist()
+        except Exception as e:
+            logger.error(f"zipfile extraction error: {e}")
+            return False, []
+    
+    def _process_archive(self, archive_path: Path, extract_dir: Path, archive_type: str) -> ProcessedFile:
+        """
+        Extract archive (ZIP, RAR, 7z) and detect VRM files and metadata.
+        
+        Uses 7-Zip for RAR/7z, falls back to Python zipfile for ZIP.
         Preserves the original archive and extracts to a dedicated folder.
         """
-        extract_dir.mkdir(parents=True, exist_ok=True)
         notes: dict = {}
-        vrm_files: list[Path] = []
+        notes["original_archive"] = str(archive_path)
+        notes["archive_type"] = archive_type
+        
+        # Try extraction
+        success = False
         all_files: list[str] = []
         
-        # Extract all contents
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(extract_dir)
-            all_files = zf.namelist()
+        if archive_type == "zip" and not SEVEN_ZIP_PATH:
+            # Use Python zipfile for ZIP if 7-Zip not available
+            success, all_files = self._extract_with_zipfile(archive_path, extract_dir)
+        else:
+            # Use 7-Zip for all archive types
+            success, all_files = self._extract_with_7zip(archive_path, extract_dir)
+            
+            # Fallback to Python zipfile for ZIP
+            if not success and archive_type == "zip":
+                success, all_files = self._extract_with_zipfile(archive_path, extract_dir)
+        
+        if not success:
+            error_msg = "7-Zip not installed" if not SEVEN_ZIP_PATH else "Extraction failed"
+            return ProcessedFile(
+                primary_path=archive_path,
+                file_type=archive_type,
+                size_bytes=archive_path.stat().st_size,
+                notes={"error": f"{error_msg}. Install 7-Zip from https://7-zip.org/"},
+            )
         
         notes["archive_contents"] = all_files
-        notes["original_archive"] = str(zip_path)
+        logger.info(f"Extracted {len(all_files)} files from {archive_path.name}")
         
         # Find all VRM files
         vrm_files = list(extract_dir.rglob("*.vrm"))
@@ -95,17 +199,37 @@ class ArchiveHandler:
             primary_path = vrm_files[0]
             file_type = "vrm"
             additional_vrms = vrm_files[1:] if len(vrm_files) > 1 else []
+            logger.info(f"Found {len(vrm_files)} VRM file(s) in archive")
         else:
-            # No VRM found, keep as zip reference
-            primary_path = zip_path
-            file_type = "zip"
+            # No VRM found, check for other 3D formats
+            primary_path = archive_path
+            file_type = archive_type
             additional_vrms = []
             
-            # Check for GLB files
-            glb_files = list(extract_dir.rglob("*.glb"))
+            # Check for GLB/GLTF files
+            glb_files = list(extract_dir.rglob("*.glb")) + list(extract_dir.rglob("*.gltf"))
             if glb_files:
                 notes["glb_files"] = [str(f.relative_to(extract_dir)) for f in glb_files]
                 notes["conversion"] = self._get_conversion_notes()
+                logger.info(f"Found {len(glb_files)} GLB/GLTF file(s) - conversion needed")
+            
+            # Check for FBX files
+            fbx_files = list(extract_dir.rglob("*.fbx"))
+            if fbx_files:
+                notes["fbx_files"] = [str(f.relative_to(extract_dir)) for f in fbx_files]
+                logger.info(f"Found {len(fbx_files)} FBX file(s)")
+            
+            # Check for OBJ files
+            obj_files = list(extract_dir.rglob("*.obj"))
+            if obj_files:
+                notes["obj_files"] = [str(f.relative_to(extract_dir)) for f in obj_files]
+                logger.info(f"Found {len(obj_files)} OBJ file(s)")
+            
+            # Check for Blender files
+            blend_files = list(extract_dir.rglob("*.blend"))
+            if blend_files:
+                notes["blend_files"] = [str(f.relative_to(extract_dir)) for f in blend_files]
+                logger.info(f"Found {len(blend_files)} Blender file(s)")
         
         return ProcessedFile(
             primary_path=primary_path,

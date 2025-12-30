@@ -53,8 +53,8 @@ class VRMViewerHandler(SimpleHTTPRequestHandler):
             # Convert to JSON-serializable format
             models = []
             for r in records:
-                # Get relative path for file
-                file_path = Path(r.file_path)
+                # Use the stored file_path - it's relative to workspace
+                file_path = r.file_path
                 
                 # Get relative thumbnail path
                 thumb_path = None
@@ -69,7 +69,7 @@ class VRMViewerHandler(SimpleHTTPRequestHandler):
                     "artist": r.artist,
                     "source": r.source,
                     "source_url": r.source_url,
-                    "file_path": file_path.name,
+                    "file_path": file_path,
                     "file_type": r.file_type,
                     "size_bytes": r.size_bytes,
                     "thumbnail_path": thumb_path,
@@ -93,7 +93,6 @@ class VRMViewerHandler(SimpleHTTPRequestHandler):
             records = store.list_all()
             store.close()
             
-            # Count all models
             model_count = len(records)
             
             self.send_response(200)
@@ -106,23 +105,52 @@ class VRMViewerHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
     
-    def serve_model_file(self, filename: str):
-        """Serve a VRM model file."""
-        # Search in raw directories for the file
-        for source_dir in self.data_dir.glob("raw/*"):
-            file_path = source_dir / filename
-            if file_path.exists():
-                self.serve_file(file_path, "model/gltf-binary")
+    def serve_model_file(self, file_path: str):
+        """Serve a model file (VRM, GLB, etc.)."""
+        # Decode the path
+        file_path = unquote(file_path)
+        
+        # Try the path as-is first (it might be a full relative path)
+        full_path = Path(file_path)
+        if full_path.exists() and full_path.is_file():
+            self.serve_file(full_path, self._get_model_content_type(full_path))
+            return
+        
+        # Try relative to data directory
+        data_path = self.data_dir / file_path
+        if data_path.exists() and data_path.is_file():
+            self.serve_file(data_path, self._get_model_content_type(data_path))
+            return
+        
+        # Extract just the filename for searching
+        filename = Path(file_path).name
+        
+        # Search in raw directories
+        for raw_file in self.data_dir.glob(f"raw/**/{filename}"):
+            if raw_file.is_file():
+                self.serve_file(raw_file, self._get_model_content_type(raw_file))
                 return
         
-        # Also check extracted directory
-        for extracted_dir in self.data_dir.glob("extracted/*"):
-            file_path = extracted_dir / filename
-            if file_path.exists():
-                self.serve_file(file_path, "model/gltf-binary")
+        # Search in extracted directories
+        for extracted_file in self.data_dir.glob(f"extracted/**/{filename}"):
+            if extracted_file.is_file():
+                self.serve_file(extracted_file, self._get_model_content_type(extracted_file))
                 return
         
-        self.send_error(404, f"Model not found: {filename}")
+        self.send_error(404, f"Model not found: {file_path}")
+    
+    def _get_model_content_type(self, file_path: Path) -> str:
+        """Get content type for model files."""
+        ext = file_path.suffix.lower()
+        content_types = {
+            ".vrm": "model/gltf-binary",
+            ".glb": "model/gltf-binary",
+            ".gltf": "model/gltf+json",
+            ".fbx": "application/octet-stream",
+            ".obj": "text/plain",
+            ".blend": "application/octet-stream",
+        }
+        return content_types.get(ext, "application/octet-stream")
     
     def serve_thumbnail(self, path: str):
         """Serve a thumbnail image."""

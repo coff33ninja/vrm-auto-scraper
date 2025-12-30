@@ -1,15 +1,21 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
 // State
 let scene, camera, renderer, controls;
+let currentModel = null;
 let currentVRM = null;
 let models = [];
 let clock = new THREE.Clock();
 let lastModelCount = 0;
 let refreshInterval = null;
+
+// Supported preview formats
+const PREVIEWABLE_FORMATS = ['vrm', 'glb', 'gltf'];
+const ARCHIVE_FORMATS = ['zip', 'rar', '7z'];
 
 // DOM elements
 const container = document.getElementById('canvas-container');
@@ -80,6 +86,7 @@ function animate() {
     
     const delta = clock.getDelta();
     
+    // Update VRM animations if present
     if (currentVRM) {
         currentVRM.update(delta);
     }
@@ -88,48 +95,101 @@ function animate() {
     renderer.render(scene, camera);
 }
 
+// Clear current model from scene
+function clearCurrentModel() {
+    if (currentModel) {
+        scene.remove(currentModel);
+        // Dispose of geometries and materials
+        currentModel.traverse((child) => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) {
+                    child.material.forEach(m => m.dispose());
+                } else {
+                    child.material.dispose();
+                }
+            }
+        });
+        currentModel = null;
+    }
+    if (currentVRM) {
+        VRMUtils.deepDispose(currentVRM.scene);
+        currentVRM = null;
+    }
+}
+
+// Center camera on loaded model
+function centerCameraOnModel(object) {
+    const box = new THREE.Box3().setFromObject(object);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const distance = maxDim * 2;
+    
+    controls.target.copy(center);
+    camera.position.set(center.x, center.y + size.y * 0.3, center.z + distance);
+    controls.update();
+}
 
 // Load VRM model
-async function loadVRM(filePath) {
+async function loadVRM(url) {
+    const loader = new GLTFLoader();
+    loader.register((parser) => new VRMLoaderPlugin(parser));
+
+    const gltf = await loader.loadAsync(url);
+    const vrm = gltf.userData.vrm;
+
+    if (vrm) {
+        VRMUtils.rotateVRM0(vrm);
+        currentVRM = vrm;
+        currentModel = vrm.scene;
+        scene.add(vrm.scene);
+        centerCameraOnModel(vrm.scene);
+        return true;
+    }
+    return false;
+}
+
+// Load GLB/GLTF model
+async function loadGLTF(url) {
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync(url);
+    
+    currentModel = gltf.scene;
+    scene.add(gltf.scene);
+    centerCameraOnModel(gltf.scene);
+    return true;
+}
+
+// Load any supported 3D model
+async function loadModel(filePath, fileType) {
     loadingEl.style.display = 'block';
     noModelEl.style.display = 'none';
     controlsEl.style.display = 'none';
 
-    // Remove current VRM
-    if (currentVRM) {
-        scene.remove(currentVRM.scene);
-        VRMUtils.deepDispose(currentVRM.scene);
-        currentVRM = null;
-    }
+    // Clear previous model
+    clearCurrentModel();
 
-    const loader = new GLTFLoader();
-    loader.register((parser) => new VRMLoaderPlugin(parser));
-
+    const url = `/models/${encodeURIComponent(filePath)}`;
+    
     try {
-        const gltf = await loader.loadAsync(`/models/${filePath}`);
-        const vrm = gltf.userData.vrm;
-
-        if (vrm) {
-            // Rotate to face camera
-            VRMUtils.rotateVRM0(vrm);
-            
-            currentVRM = vrm;
-            scene.add(vrm.scene);
-
-            // Center camera on model
-            const box = new THREE.Box3().setFromObject(vrm.scene);
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-            
-            controls.target.copy(center);
-            camera.position.set(center.x, center.y + size.y * 0.3, size.y * 2.5);
-            controls.update();
-
+        let success = false;
+        
+        if (fileType === 'vrm') {
+            success = await loadVRM(url);
+        } else if (fileType === 'glb' || fileType === 'gltf') {
+            success = await loadGLTF(url);
+        }
+        
+        if (success) {
             loadingEl.style.display = 'none';
             controlsEl.style.display = 'block';
+        } else {
+            throw new Error('Failed to load model');
         }
     } catch (error) {
-        console.error('Error loading VRM:', error);
+        console.error('Error loading model:', error);
         loadingEl.style.display = 'none';
         noModelEl.innerHTML = `<h2>Error loading model</h2><p>${error.message}</p>`;
         noModelEl.style.display = 'block';
@@ -149,23 +209,40 @@ async function fetchModels() {
     }
 }
 
+// Get icon for file type
+function getFileIcon(fileType) {
+    if (fileType === 'vrm') return '🎭';
+    if (fileType === 'glb' || fileType === 'gltf') return '🎨';
+    if (fileType === 'fbx') return '📐';
+    if (fileType === 'blend') return '🎬';
+    if (ARCHIVE_FORMATS.includes(fileType)) return '📦';
+    return '📄';
+}
+
+// Check if file type can be previewed
+function canPreview(fileType) {
+    return PREVIEWABLE_FORMATS.includes(fileType);
+}
+
 // Render model list
 function renderModelList(modelsToRender) {
     modelList.innerHTML = modelsToRender.map(model => {
-        const isVRM = model.file_type === 'vrm';
-        const canPreview = isVRM;
+        const previewable = canPreview(model.file_type);
+        const icon = getFileIcon(model.file_type);
         
         return `
-        <div class="model-card ${canPreview ? '' : 'no-preview'}" data-id="${model.id}" data-path="${model.file_path}" data-type="${model.file_type}">
+        <div class="model-card ${previewable ? '' : 'no-preview'}" data-id="${model.id}" data-path="${model.file_path}" data-type="${model.file_type}">
             ${model.thumbnail_path 
-                ? `<img class="model-thumb" src="/thumbnails/${model.thumbnail_path}" alt="${model.name}" onerror="this.style.display='none'">`
-                : `<div class="model-thumb" style="display:flex;align-items:center;justify-content:center;font-size:2rem;">${isVRM ? '🎭' : '📦'}</div>`
+                ? `<img class="model-thumb" src="/thumbnails/${model.thumbnail_path}" alt="${model.name}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                   <div class="model-thumb fallback-icon" style="display:none;align-items:center;justify-content:center;font-size:2rem;">${icon}</div>`
+                : `<div class="model-thumb" style="display:flex;align-items:center;justify-content:center;font-size:2rem;">${icon}</div>`
             }
             <div class="model-info">
                 <div class="model-name" title="${model.name}">${model.name}</div>
                 <div class="model-artist">by ${model.artist || 'Unknown'}</div>
                 <div class="model-meta">
                     ${model.source} • ${model.file_type.toUpperCase()} • ${formatSize(model.size_bytes)}
+                    ${previewable ? '' : ' • No preview'}
                 </div>
             </div>
         </div>
@@ -175,12 +252,17 @@ function renderModelList(modelsToRender) {
     document.querySelectorAll('.model-card').forEach(card => {
         card.addEventListener('click', () => {
             const fileType = card.dataset.type;
-            if (fileType === 'vrm') {
+            const filePath = card.dataset.path;
+            
+            if (canPreview(fileType)) {
                 document.querySelectorAll('.model-card').forEach(c => c.classList.remove('active'));
                 card.classList.add('active');
-                loadVRM(card.dataset.path);
+                loadModel(filePath, fileType);
             } else {
-                showNotification(`${fileType.toUpperCase()} files cannot be previewed. Only VRM files can be viewed in 3D.`);
+                const msg = ARCHIVE_FORMATS.includes(fileType) 
+                    ? `${fileType.toUpperCase()} archive - check extracted folder for 3D files`
+                    : `${fileType.toUpperCase()} files need conversion to VRM/GLB for preview`;
+                showNotification(msg);
             }
         });
     });
@@ -189,7 +271,8 @@ function renderModelList(modelsToRender) {
 // Update stats
 function updateStats() {
     const totalSize = models.reduce((sum, m) => sum + m.size_bytes, 0);
-    statsEl.textContent = `${models.length} models • ${formatSize(totalSize)}`;
+    const previewableCount = models.filter(m => canPreview(m.file_type)).length;
+    statsEl.textContent = `${models.length} models (${previewableCount} previewable) • ${formatSize(totalSize)}`;
 }
 
 // Format file size
@@ -205,7 +288,8 @@ searchInput.addEventListener('input', (e) => {
     const filtered = models.filter(m => 
         m.name.toLowerCase().includes(query) ||
         (m.artist && m.artist.toLowerCase().includes(query)) ||
-        m.source.toLowerCase().includes(query)
+        m.source.toLowerCase().includes(query) ||
+        m.file_type.toLowerCase().includes(query)
     );
     renderModelList(filtered);
 });
@@ -229,7 +313,6 @@ async function checkForNewModels() {
 
 // Show notification toast
 function showNotification(message) {
-    // Remove existing notification
     const existing = document.querySelector('.notification');
     if (existing) existing.remove();
     
@@ -247,6 +330,7 @@ function showNotification(message) {
         font-weight: bold;
         z-index: 1000;
         animation: slideIn 0.3s ease;
+        max-width: 400px;
     `;
     document.body.appendChild(notification);
     

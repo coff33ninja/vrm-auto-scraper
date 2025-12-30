@@ -659,5 +659,247 @@ def web_viewer(
     run_server(host=host, port=port)
 
 
+@app.command("scan-extracted")
+def scan_extracted(
+    add_to_db: bool = typer.Option(
+        True,
+        "--add/--no-add",
+        help="Add found files to database",
+    ),
+):
+    """
+    Scan extracted archives and index 3D model files.
+    
+    Finds FBX, Blend, OBJ, PMX, VRM, GLB files in the extracted folder
+    and adds them to the database for viewing.
+    """
+    from datetime import datetime, timezone
+    from storage import ModelRecord
+    
+    store = get_store()
+    extracted_dir = config.extracted_dir
+    
+    # 3D model extensions to look for
+    model_extensions = {".vrm", ".glb", ".gltf", ".fbx", ".blend", ".obj", ".pmx"}
+    
+    typer.echo(f"Scanning {extracted_dir} for 3D model files...")
+    
+    found_files: list[tuple[Path, str]] = []
+    
+    for ext in model_extensions:
+        for file_path in extracted_dir.rglob(f"*{ext}"):
+            if file_path.is_file():
+                found_files.append((file_path, ext.lstrip(".")))
+    
+    typer.echo(f"Found {len(found_files)} 3D model files\n")
+    
+    if not found_files:
+        store.close()
+        return
+    
+    # Group by type
+    by_type: dict[str, list[Path]] = {}
+    for path, ftype in found_files:
+        by_type.setdefault(ftype, []).append(path)
+    
+    typer.echo("By type:")
+    for ftype, files in sorted(by_type.items()):
+        typer.echo(f"  {ftype.upper()}: {len(files)}")
+    
+    if not add_to_db:
+        typer.echo("\nUse --add to add these files to the database.")
+        store.close()
+        return
+    
+    typer.echo("\nAdding to database...")
+    added = 0
+    skipped = 0
+    
+    for file_path, file_type in found_files:
+        # Generate a unique ID based on path
+        rel_path = file_path.relative_to(extracted_dir)
+        parts = rel_path.parts
+        
+        # Try to extract source and model_id from path
+        # Expected: source/model_id/...
+        source = parts[0] if len(parts) > 0 else "extracted"
+        model_id = parts[1] if len(parts) > 1 else file_path.stem
+        
+        # Create unique source_model_id
+        source_model_id = f"extracted_{model_id}_{file_path.stem}"
+        
+        # Check if already exists
+        if store.exists(source, source_model_id):
+            skipped += 1
+            continue
+        
+        # Get file info
+        try:
+            size_bytes = file_path.stat().st_size
+        except OSError:
+            continue
+        
+        # Create record
+        record = ModelRecord(
+            source=source,
+            source_model_id=source_model_id,
+            name=file_path.stem,
+            artist="Unknown",
+            source_url="",
+            license=None,
+            license_url=None,
+            thumbnail_path=None,
+            acquired_at=datetime.now(timezone.utc).isoformat(),
+            file_path=str(file_path),
+            file_type=file_type,
+            size_bytes=size_bytes,
+            notes={"from_archive": str(rel_path.parent)},
+        )
+        
+        try:
+            store.add(record)
+            added += 1
+            typer.echo(f"  + {file_type.upper()}: {file_path.name}")
+        except Exception as e:
+            typer.echo(f"  ! Error adding {file_path.name}: {e}")
+    
+    store.close()
+    
+    typer.echo(f"\nAdded: {added}, Skipped (existing): {skipped}")
+
+
+@app.command("convert")
+def convert_models(
+    file_type: Optional[str] = typer.Option(
+        None,
+        "--type", "-t",
+        help="Convert only this file type (fbx, blend, obj)",
+    ),
+    limit: int = typer.Option(
+        0,
+        "--limit", "-l",
+        help="Maximum number of files to convert (0 = all)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be converted without actually converting",
+    ),
+):
+    """
+    Convert FBX/Blend/OBJ files to GLB format for web preview.
+    
+    Requires Blender to be installed. Optionally uses FBX2glTF for faster FBX conversion.
+    
+    Converted files are saved alongside originals and added to the database.
+    """
+    from datetime import datetime, timezone
+    from converter import convert_to_glb, get_converter_status
+    from storage import ModelRecord
+    
+    # Check converter availability
+    status = get_converter_status()
+    
+    typer.echo("=== Converter Status ===")
+    if status["blender"]["available"]:
+        typer.echo(f"✓ Blender: {status['blender']['path']}")
+    else:
+        typer.echo("✗ Blender: Not found")
+        typer.echo("  Install from https://www.blender.org/download/")
+    
+    if status["fbx2gltf"]["available"]:
+        typer.echo(f"✓ FBX2glTF: {status['fbx2gltf']['path']}")
+    else:
+        typer.echo("○ FBX2glTF: Not found (optional, Blender will be used)")
+    
+    if not status["blender"]["available"]:
+        typer.echo("\nBlender is required for conversion. Please install it first.")
+        raise typer.Exit(1)
+    
+    typer.echo("")
+    
+    # Get models that need conversion
+    store = get_store()
+    records = store.list_all()
+    
+    convertible_types = {"fbx", "blend", "obj"}
+    if file_type:
+        convertible_types = {file_type.lower()}
+    
+    to_convert = [r for r in records if r.file_type in convertible_types]
+    
+    if not to_convert:
+        typer.echo("No files to convert.")
+        store.close()
+        return
+    
+    if limit > 0:
+        to_convert = to_convert[:limit]
+    
+    typer.echo(f"Found {len(to_convert)} file(s) to convert:\n")
+    
+    for r in to_convert:
+        typer.echo(f"  {r.file_type.upper()}: {r.name}")
+    
+    if dry_run:
+        typer.echo("\n(Dry run - no files converted)")
+        store.close()
+        return
+    
+    typer.echo("\nConverting...")
+    converted = 0
+    failed = 0
+    
+    for r in to_convert:
+        input_path = Path(r.file_path)
+        
+        if not input_path.exists():
+            typer.echo(f"  ✗ {r.name}: File not found")
+            failed += 1
+            continue
+        
+        output_path = input_path.with_suffix(".glb")
+        
+        # Skip if already converted
+        if output_path.exists():
+            typer.echo(f"  ○ {r.name}: Already converted")
+            continue
+        
+        result = convert_to_glb(input_path, output_path)
+        
+        if result:
+            typer.echo(f"  ✓ {r.name}")
+            converted += 1
+            
+            # Add converted file to database
+            new_record = ModelRecord(
+                source=r.source,
+                source_model_id=f"{r.source_model_id}_glb",
+                name=f"{r.name} (GLB)",
+                artist=r.artist,
+                source_url=r.source_url,
+                license=r.license,
+                license_url=r.license_url,
+                thumbnail_path=r.thumbnail_path,
+                acquired_at=datetime.now(timezone.utc).isoformat(),
+                file_path=str(output_path),
+                file_type="glb",
+                size_bytes=output_path.stat().st_size,
+                notes={"converted_from": str(input_path)},
+            )
+            
+            try:
+                store.add(new_record)
+            except Exception:
+                pass  # Ignore if already exists
+        else:
+            typer.echo(f"  ✗ {r.name}: Conversion failed")
+            failed += 1
+    
+    store.close()
+    
+    typer.echo(f"\nConverted: {converted}, Failed: {failed}")
+
+
 if __name__ == "__main__":
     app()
