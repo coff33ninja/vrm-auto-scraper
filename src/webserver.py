@@ -53,10 +53,6 @@ class VRMViewerHandler(SimpleHTTPRequestHandler):
             # Convert to JSON-serializable format
             models = []
             for r in records:
-                # Only include VRM files
-                if r.file_type != "vrm":
-                    continue
-                
                 # Get relative path for file
                 file_path = Path(r.file_path)
                 
@@ -97,15 +93,15 @@ class VRMViewerHandler(SimpleHTTPRequestHandler):
             records = store.list_all()
             store.close()
             
-            # Count only VRM files
-            vrm_count = sum(1 for r in records if r.file_type == "vrm")
+            # Count all models
+            model_count = len(records)
             
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
-            self.wfile.write(json.dumps({"count": vrm_count}).encode())
+            self.wfile.write(json.dumps({"count": model_count}).encode())
             
         except Exception as e:
             self.send_error(500, str(e))

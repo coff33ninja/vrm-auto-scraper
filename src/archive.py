@@ -5,6 +5,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+# Try to import rarfile for RAR support
+try:
+    import rarfile
+    HAS_RAR_SUPPORT = True
+except ImportError:
+    HAS_RAR_SUPPORT = False
+
 
 @dataclass
 class ProcessedFile:

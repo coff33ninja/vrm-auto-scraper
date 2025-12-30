@@ -151,28 +151,37 @@ async function fetchModels() {
 
 // Render model list
 function renderModelList(modelsToRender) {
-    modelList.innerHTML = modelsToRender.map(model => `
-        <div class="model-card" data-id="${model.id}" data-path="${model.file_path}">
+    modelList.innerHTML = modelsToRender.map(model => {
+        const isVRM = model.file_type === 'vrm';
+        const canPreview = isVRM;
+        
+        return `
+        <div class="model-card ${canPreview ? '' : 'no-preview'}" data-id="${model.id}" data-path="${model.file_path}" data-type="${model.file_type}">
             ${model.thumbnail_path 
                 ? `<img class="model-thumb" src="/thumbnails/${model.thumbnail_path}" alt="${model.name}" onerror="this.style.display='none'">`
-                : `<div class="model-thumb" style="display:flex;align-items:center;justify-content:center;font-size:3rem;">🎭</div>`
+                : `<div class="model-thumb" style="display:flex;align-items:center;justify-content:center;font-size:2rem;">${isVRM ? '🎭' : '📦'}</div>`
             }
             <div class="model-info">
                 <div class="model-name" title="${model.name}">${model.name}</div>
                 <div class="model-artist">by ${model.artist || 'Unknown'}</div>
                 <div class="model-meta">
-                    ${model.source} • ${formatSize(model.size_bytes)}
+                    ${model.source} • ${model.file_type.toUpperCase()} • ${formatSize(model.size_bytes)}
                 </div>
             </div>
         </div>
-    `).join('');
+    `}).join('');
 
     // Add click handlers
     document.querySelectorAll('.model-card').forEach(card => {
         card.addEventListener('click', () => {
-            document.querySelectorAll('.model-card').forEach(c => c.classList.remove('active'));
-            card.classList.add('active');
-            loadVRM(card.dataset.path);
+            const fileType = card.dataset.type;
+            if (fileType === 'vrm') {
+                document.querySelectorAll('.model-card').forEach(c => c.classList.remove('active'));
+                card.classList.add('active');
+                loadVRM(card.dataset.path);
+            } else {
+                showNotification(`${fileType.toUpperCase()} files cannot be previewed. Only VRM files can be viewed in 3D.`);
+            }
         });
     });
 }
