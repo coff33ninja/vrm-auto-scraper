@@ -270,3 +270,80 @@ class TestArchivePreservation:
             # Verify notes reference original archive
             assert "original_archive" in result.notes
             assert result.notes["original_archive"] == str(zip_path)
+
+
+from archive import is_skippable, ACCESSORY_KEYWORDS, SKIP_EXTENSIONS
+
+
+class TestSkipCriteria:
+    """
+    Feature: vrm-pipeline-simplification, Property 5: Skip Criteria
+    Validates: Requirements 3.1, 3.2
+    
+    For any file path, if it has .pmx extension OR contains accessory keywords
+    (props, weapon, accessory, item, clothing, stage), the pipeline SHALL skip it.
+    """
+    
+    @given(filename=filename_strategy)
+    @settings(max_examples=20, deadline=None)
+    def test_pmx_files_are_skipped(self, filename: str):
+        """PMX files are always skipped."""
+        path = Path(f"/some/dir/{filename}.pmx")
+        should_skip, reason = is_skippable(path)
+        assert should_skip is True
+        assert reason == "pmx_format"
+    
+    @given(filename=filename_strategy)
+    @settings(max_examples=20, deadline=None)
+    def test_pmd_files_are_skipped(self, filename: str):
+        """PMD files are always skipped."""
+        path = Path(f"/some/dir/{filename}.pmd")
+        should_skip, reason = is_skippable(path)
+        assert should_skip is True
+        assert reason == "pmx_format"
+    
+    @given(keyword=st.sampled_from(ACCESSORY_KEYWORDS), filename=filename_strategy)
+    @settings(max_examples=20, deadline=None)
+    def test_accessory_keywords_are_skipped(self, keyword: str, filename: str):
+        """Files with accessory keywords in path are skipped."""
+        path = Path(f"/some/{keyword}/{filename}.fbx")
+        should_skip, reason = is_skippable(path)
+        assert should_skip is True
+        assert reason.startswith("accessory_keyword:")
+    
+    @given(filename=filename_strategy)
+    @settings(max_examples=20, deadline=None)
+    def test_normal_fbx_not_skipped(self, filename: str):
+        """Normal FBX files without accessory keywords are not skipped."""
+        # Ensure filename doesn't contain any accessory keywords
+        clean_filename = filename
+        for kw in ACCESSORY_KEYWORDS:
+            clean_filename = clean_filename.replace(kw, "model")
+        
+        path = Path(f"/some/models/{clean_filename}.fbx")
+        should_skip, reason = is_skippable(path)
+        
+        # Only assert not skipped if path truly has no keywords
+        path_lower = str(path).lower()
+        has_keyword = any(kw in path_lower for kw in ACCESSORY_KEYWORDS)
+        if not has_keyword:
+            assert should_skip is False
+            assert reason == ""
+    
+    @given(filename=filename_strategy)
+    @settings(max_examples=20, deadline=None)
+    def test_vrm_files_not_skipped(self, filename: str):
+        """VRM files are not skipped (they're already the target format)."""
+        # Ensure filename doesn't contain any accessory keywords
+        clean_filename = filename
+        for kw in ACCESSORY_KEYWORDS:
+            clean_filename = clean_filename.replace(kw, "avatar")
+        
+        path = Path(f"/some/models/{clean_filename}.vrm")
+        should_skip, reason = is_skippable(path)
+        
+        # Only assert not skipped if path truly has no keywords
+        path_lower = str(path).lower()
+        has_keyword = any(kw in path_lower for kw in ACCESSORY_KEYWORDS)
+        if not has_keyword:
+            assert should_skip is False

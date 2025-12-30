@@ -7,9 +7,9 @@ from typing import Optional
 
 import requests
 
-from archive import ArchiveHandler, ProcessedFile
+from archive import ArchiveHandler
 from sources.base import BaseSource, ModelInfo
-from storage import MetadataStore, ModelRecord
+from storage import MetadataStore, ModelRecord, DownloadsTracker
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,8 @@ class CrawlerEngine:
         archive_handler: ArchiveHandler,
         raw_dir: Path,
         thumbnails_dir: Optional[Path] = None,
+        downloads_tracker: Optional[DownloadsTracker] = None,
+        force_download: bool = False,
     ):
         self.sources = sources
         self.store = store
@@ -50,6 +52,8 @@ class CrawlerEngine:
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.thumbnails_dir = thumbnails_dir or (raw_dir.parent / "thumbnails")
         self.thumbnails_dir.mkdir(parents=True, exist_ok=True)
+        self.downloads_tracker = downloads_tracker
+        self.force_download = force_download
     
     def crawl(
         self,
@@ -108,7 +112,14 @@ class CrawlerEngine:
         
         for model in source.search(keywords, max_results):
             try:
-                # Check for duplicates
+                # Check downloads tracker first (if available and not forcing)
+                if self.downloads_tracker and not self.force_download:
+                    if self.downloads_tracker.exists(source_name, model.source_model_id):
+                        logger.debug(f"Skipping already downloaded: {model.name}")
+                        result.skipped += 1
+                        continue
+                
+                # Check for duplicates in models table
                 if skip_existing and self.store.exists(source_name, model.source_model_id):
                     logger.debug(f"Skipping existing model: {model.name}")
                     result.skipped += 1

@@ -583,3 +583,88 @@ def get_converter_status() -> dict:
             "formats": ["fbx"] if FBX2GLTF_PATH else [],
         },
     }
+
+
+def vrm_exists_for(input_path: Path) -> Path | None:
+    """
+    Check if a VRM file already exists for the given input file.
+    
+    Returns the VRM path if it exists, None otherwise.
+    """
+    vrm_path = input_path.with_suffix(".vrm")
+    if vrm_path.exists():
+        return vrm_path
+    return None
+
+
+def get_vrm_output_path(input_path: Path) -> Path:
+    """Get the expected VRM output path for an input file."""
+    return input_path.with_suffix(".vrm")
+
+
+def convert_to_vrm(input_path: Path, output_path: Path | None = None, skip_existing: bool = True) -> Path | None:
+    """
+    Convert a 3D model file to VRM format.
+    
+    Currently converts to GLB (VRM-compatible) since full VRM export requires
+    the VRM addon for Blender. The output is saved with .vrm extension for
+    compatibility with VRM viewers.
+    
+    Supports: FBX, OBJ, Blend, GLB files
+    
+    Args:
+        input_path: Path to input file
+        output_path: Optional output path (defaults to same name with .vrm extension)
+        skip_existing: If True, skip conversion if VRM already exists
+        
+    Returns:
+        Path to converted VRM file, or None if conversion failed
+    """
+    if not input_path.exists():
+        logger.error(f"Input file not found: {input_path}")
+        return None
+    
+    ext = input_path.suffix.lower()
+    supported = {".fbx", ".obj", ".blend", ".glb"}
+    
+    if ext not in supported:
+        logger.error(f"Unsupported format: {ext}. Supported: {supported}")
+        return None
+    
+    if output_path is None:
+        output_path = input_path.with_suffix(".vrm")
+    
+    # Check if VRM already exists
+    if skip_existing and output_path.exists():
+        logger.info(f"VRM already exists: {output_path.name}")
+        return output_path
+    
+    # If input is already GLB, just copy/rename to VRM
+    if ext == ".glb":
+        try:
+            shutil.copy2(input_path, output_path)
+            logger.info(f"Copied GLB to VRM: {output_path.name}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Failed to copy GLB to VRM: {e}")
+            return None
+    
+    # Convert to GLB first, then rename to VRM
+    glb_path = input_path.with_suffix(".glb")
+    
+    # Convert to GLB
+    result = convert_to_glb(input_path, glb_path)
+    if result is None:
+        return None
+    
+    # Rename GLB to VRM
+    try:
+        if glb_path != output_path:
+            shutil.move(str(glb_path), str(output_path))
+        logger.info(f"Converted to VRM: {output_path.name}")
+        return output_path
+    except Exception as e:
+        logger.error(f"Failed to rename GLB to VRM: {e}")
+        # Clean up GLB if rename failed
+        glb_path.unlink(missing_ok=True)
+        return None

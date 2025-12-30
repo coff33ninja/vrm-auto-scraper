@@ -12,10 +12,6 @@ let clock = new THREE.Clock();
 let lastModelCount = 0;
 let refreshInterval = null;
 
-// Supported preview formats
-const PREVIEWABLE_FORMATS = ['vrm', 'glb', 'gltf'];
-const ARCHIVE_FORMATS = ['zip', 'rar', '7z'];
-
 // DOM elements
 const container = document.getElementById('canvas-container');
 const modelList = document.getElementById('model-list');
@@ -266,29 +262,33 @@ async function fetchModels() {
     }
 }
 
-// Get icon for file type
+// Get icon for file type (all VRM now)
 function getFileIcon(fileType) {
-    if (fileType === 'vrm') return '🎭';
-    if (fileType === 'glb' || fileType === 'gltf') return '🎨';
-    if (fileType === 'fbx') return '📐';
-    if (fileType === 'blend') return '🎬';
-    if (ARCHIVE_FORMATS.includes(fileType)) return '📦';
-    return '📄';
+    return '🎭'; // VRM avatar icon
 }
 
-// Check if file type can be previewed
-function canPreview(fileType) {
-    return PREVIEWABLE_FORMATS.includes(fileType);
+// Get icon for original format
+function getOriginalFormatIcon(originalFormat) {
+    if (!originalFormat) return '';
+    switch (originalFormat.toLowerCase()) {
+        case 'fbx': return '📐';
+        case 'blend': return '🎬';
+        case 'obj': return '📦';
+        case 'glb': return '🎨';
+        case 'vrm': return '🎭';
+        default: return '📄';
+    }
 }
 
-// Render model list
+// Render model list (all models are VRM and previewable)
 function renderModelList(modelsToRender) {
     modelList.innerHTML = modelsToRender.map(model => {
-        const previewable = canPreview(model.file_type);
         const icon = getFileIcon(model.file_type);
+        const origIcon = getOriginalFormatIcon(model.original_format);
+        const origFormat = model.original_format ? model.original_format.toUpperCase() : 'VRM';
         
         return `
-        <div class="model-card ${previewable ? '' : 'no-preview'}" data-id="${model.id}" data-path="${model.file_path}" data-type="${model.file_type}">
+        <div class="model-card" data-id="${model.id}" data-path="${model.file_path}" data-type="${model.file_type}">
             ${model.thumbnail_path 
                 ? `<img class="model-thumb" src="/thumbnails/${model.thumbnail_path}" alt="${model.name}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
                    <div class="model-thumb fallback-icon" style="display:none;align-items:center;justify-content:center;font-size:2rem;">${icon}</div>`
@@ -298,38 +298,27 @@ function renderModelList(modelsToRender) {
                 <div class="model-name" title="${model.name}">${model.name}</div>
                 <div class="model-artist">by ${model.artist || 'Unknown'}</div>
                 <div class="model-meta">
-                    ${model.source} • ${model.file_type.toUpperCase()} • ${formatSize(model.size_bytes)}
-                    ${previewable ? '' : ' • No preview'}
+                    ${model.source} • ${origIcon} from ${origFormat} • ${formatSize(model.size_bytes)}
                 </div>
             </div>
         </div>
     `}).join('');
 
-    // Add click handlers
+    // Add click handlers - all models are previewable now
     document.querySelectorAll('.model-card').forEach(card => {
         card.addEventListener('click', () => {
-            const fileType = card.dataset.type;
             const filePath = card.dataset.path;
-            
-            if (canPreview(fileType)) {
-                document.querySelectorAll('.model-card').forEach(c => c.classList.remove('active'));
-                card.classList.add('active');
-                loadModel(filePath, fileType);
-            } else {
-                const msg = ARCHIVE_FORMATS.includes(fileType) 
-                    ? `${fileType.toUpperCase()} archive - check extracted folder for 3D files`
-                    : `${fileType.toUpperCase()} files need conversion to VRM/GLB for preview`;
-                showNotification(msg);
-            }
+            document.querySelectorAll('.model-card').forEach(c => c.classList.remove('active'));
+            card.classList.add('active');
+            loadModel(filePath, 'vrm');
         });
     });
 }
 
-// Update stats
+// Update stats (all models are VRM now)
 function updateStats() {
     const totalSize = models.reduce((sum, m) => sum + m.size_bytes, 0);
-    const previewableCount = models.filter(m => canPreview(m.file_type)).length;
-    statsEl.textContent = `${models.length} models (${previewableCount} previewable) • ${formatSize(totalSize)}`;
+    statsEl.textContent = `${models.length} VRM models • ${formatSize(totalSize)}`;
 }
 
 // Format file size

@@ -75,6 +75,7 @@ class VRMViewerHandler(SimpleHTTPRequestHandler):
                     "thumbnail_path": thumb_path,
                     "license": r.license,
                     "acquired_at": r.acquired_at,
+                    "original_format": r.original_format,
                 })
             
             self.send_response(200)

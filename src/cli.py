@@ -9,6 +9,7 @@ import typer
 from archive import ArchiveHandler
 from config import config
 from crawler import CrawlerEngine
+from pipeline import VRMPipeline
 from sources.base import BaseSource
 from sources.github import GitHubSource
 from sources.sketchfab import SketchfabSource
@@ -18,7 +19,7 @@ from sources.vroid_hub import load_tokens as load_vroid_tokens
 from sources.deviantart import DeviantArtSource, DeviantArtOAuth
 from sources.deviantart import save_tokens as save_da_tokens
 from sources.deviantart import load_tokens as load_da_tokens
-from storage import MetadataStore
+from storage import MetadataStore, DownloadsTracker
 
 app = typer.Typer(
     name="vrm-scraper",
@@ -37,6 +38,12 @@ def get_store() -> MetadataStore:
     """Get the metadata store instance."""
     config.ensure_dirs()
     return MetadataStore(config.db_path)
+
+
+def get_downloads_tracker() -> DownloadsTracker:
+    """Get the downloads tracker instance."""
+    config.ensure_dirs()
+    return DownloadsTracker(config.db_path)
 
 
 def get_sources(
@@ -122,6 +129,11 @@ def crawl(
         "--skip-existing/--no-skip-existing",
         help="Skip models already in database",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force", "-f",
+        help="Force re-download even if already in downloads table",
+    ),
 ):
     """Crawl sources and download VRM models."""
     # Parse keywords
@@ -157,6 +169,7 @@ def crawl(
     # Initialize components
     config.ensure_dirs()
     store = get_store()
+    downloads = get_downloads_tracker()
     archive_handler = ArchiveHandler(config.extracted_dir)
     
     crawler = CrawlerEngine(
@@ -164,11 +177,15 @@ def crawl(
         store=store,
         archive_handler=archive_handler,
         raw_dir=config.raw_dir,
+        downloads_tracker=downloads,
+        force_download=force,
     )
     
     typer.echo(f"Starting crawl with {len(source_instances)} source(s)...")
     typer.echo(f"Keywords: {keyword_list or ['vrm', 'vroid', 'avatar']}")
     typer.echo(f"Max per source: {max_per_source}")
+    if force:
+        typer.echo("Force mode: re-downloading all models")
     
     # Run crawl
     result = crawler.crawl(
@@ -178,6 +195,7 @@ def crawl(
     )
     
     store.close()
+    downloads.close()
     
     # Report results
     typer.echo("\n--- Crawl Complete ---")
@@ -340,14 +358,15 @@ def list_models(
         typer.echo("No models found.")
         return
     
-    typer.echo(f"{'ID':<6} {'Source':<12} {'Type':<6} {'Name':<30} {'Artist':<20} {'Acquired':<12}")
-    typer.echo("-" * 90)
+    typer.echo(f"{'ID':<6} {'Source':<12} {'Type':<6} {'From':<6} {'Name':<28} {'Artist':<18} {'Acquired':<12}")
+    typer.echo("-" * 94)
     
     for r in records:
-        name = r.name[:28] + ".." if len(r.name) > 30 else r.name
-        artist = r.artist[:18] + ".." if len(r.artist) > 20 else r.artist
+        name = r.name[:26] + ".." if len(r.name) > 28 else r.name
+        artist = r.artist[:16] + ".." if len(r.artist) > 18 else r.artist
         acquired = r.acquired_at[:10] if r.acquired_at else ""
-        typer.echo(f"{r.id:<6} {r.source:<12} {r.file_type:<6} {name:<30} {artist:<20} {acquired:<12}")
+        orig_fmt = r.original_format or "-"
+        typer.echo(f"{r.id:<6} {r.source:<12} {r.file_type:<6} {orig_fmt:<6} {name:<28} {artist:<18} {acquired:<12}")
     
     typer.echo(f"\nTotal: {len(records)} model(s)")
 
@@ -899,6 +918,286 @@ def convert_models(
     store.close()
     
     typer.echo(f"\nConverted: {converted}, Failed: {failed}")
+
+
+@app.command("classify")
+def classify_file(
+    file_path: str = typer.Argument(
+        ...,
+        help="Path to file to classify",
+    ),
+    thumbnail: Optional[str] = typer.Option(
+        None,
+        "--thumbnail", "-t",
+        help="Path to thumbnail image for AI classification",
+    ),
+    no_ai: bool = typer.Option(
+        False,
+        "--no-ai",
+        help="Disable AI classification, use fuzzy matching only",
+    ),
+):
+    """
+    Test AI classification on a file.
+    
+    Shows classification result including confidence, category,
+    and which strategies were used.
+    """
+    from classifier import ItemClassifier, check_ai_dependencies
+    
+    file_p = Path(file_path)
+    if not file_p.exists():
+        typer.echo(f"File not found: {file_path}")
+        raise typer.Exit(1)
+    
+    thumb_p = Path(thumbnail) if thumbnail else None
+    if thumb_p and not thumb_p.exists():
+        typer.echo(f"Thumbnail not found: {thumbnail}")
+        thumb_p = None
+    
+    # Check AI dependencies
+    if not no_ai:
+        deps = check_ai_dependencies()
+        typer.echo("=== AI Dependencies ===")
+        for name, available in deps.items():
+            status = "✓" if available else "✗"
+            typer.echo(f"  {status} {name}")
+        typer.echo("")
+    
+    # Create classifier
+    config.ensure_dirs()
+    enable_ai = not no_ai
+    
+    try:
+        classifier = ItemClassifier(
+            db_path=config.db_path,
+            clip_threshold=config.clip_threshold,
+            text_threshold=config.text_threshold,
+            fuzzy_threshold=config.fuzzy_threshold,
+            enable_ai=enable_ai,
+        )
+    except ImportError as e:
+        typer.echo(f"AI initialization failed: {e}")
+        typer.echo("Falling back to fuzzy matching only...")
+        classifier = ItemClassifier(
+            db_path=config.db_path,
+            fuzzy_threshold=config.fuzzy_threshold,
+            enable_ai=False,
+        )
+    
+    # Classify
+    typer.echo(f"=== Classifying: {file_p.name} ===\n")
+    result = classifier.classify(file_p, thumb_p)
+    
+    # Display result
+    skip_status = "🚫 SKIP" if result.should_skip else "✓ KEEP"
+    typer.echo(f"Decision: {skip_status}")
+    typer.echo(f"Confidence: {result.confidence:.1%}")
+    typer.echo(f"Category: {result.category or 'None'}")
+    typer.echo(f"Reason: {result.reason}")
+    typer.echo(f"Strategies: {', '.join(result.strategies_used)}")
+    
+    classifier.close()
+
+
+@app.command("process-all")
+def process_all(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be processed without actually converting",
+    ),
+    limit: int = typer.Option(
+        0,
+        "--limit", "-l",
+        help="Maximum number of files to process (0 = all)",
+    ),
+    skip_ai: bool = typer.Option(
+        False,
+        "--skip-ai",
+        help="Skip AI classification, use keyword matching only",
+    ),
+):
+    """
+    Process all existing files through the VRM pipeline.
+    
+    Scans data/raw and data/extracted directories, extracts archives,
+    converts supported formats to VRM, and adds to database.
+    
+    Skips accessories, PMX files, and already-converted files.
+    """
+    from archive import is_skippable
+    from converter import vrm_exists_for, get_converter_status
+    
+    # Check converter availability
+    status = get_converter_status()
+    if not status["blender"]["available"]:
+        typer.echo("✗ Blender not found - required for conversion")
+        typer.echo("  Install from https://www.blender.org/download/")
+        raise typer.Exit(1)
+    
+    typer.echo(f"✓ Blender: {status['blender']['path']}")
+    if skip_ai:
+        typer.echo("⚠ AI classification disabled (--skip-ai)")
+    typer.echo("")
+    
+    config.ensure_dirs()
+    store = get_store()
+    downloads = get_downloads_tracker()
+    pipeline = VRMPipeline(store, downloads, config.extracted_dir)
+    
+    # Collect files to process
+    convertible_extensions = {".fbx", ".obj", ".blend", ".glb", ".vrm"}
+    archive_extensions = {".zip", ".rar", ".7z"}
+    
+    files_to_process: list[tuple[Path, str]] = []  # (path, category)
+    
+    # Scan raw directory for archives
+    typer.echo(f"Scanning {config.raw_dir}...")
+    for ext in archive_extensions:
+        for file_path in config.raw_dir.rglob(f"*{ext}"):
+            if file_path.is_file():
+                files_to_process.append((file_path, "archive"))
+    
+    # Scan extracted directory for 3D files
+    typer.echo(f"Scanning {config.extracted_dir}...")
+    for ext in convertible_extensions:
+        for file_path in config.extracted_dir.rglob(f"*{ext}"):
+            if file_path.is_file():
+                # Check if should skip (use AI unless --skip-ai)
+                should_skip, reason = is_skippable(file_path, use_ai=not skip_ai)
+                if should_skip:
+                    continue
+                # Check if VRM already exists
+                if ext != ".vrm" and vrm_exists_for(file_path):
+                    continue
+                files_to_process.append((file_path, "model"))
+    
+    if not files_to_process:
+        typer.echo("\nNo files to process.")
+        store.close()
+        downloads.close()
+        return
+    
+    # Count by category
+    archives = [f for f, c in files_to_process if c == "archive"]
+    models = [f for f, c in files_to_process if c == "model"]
+    
+    typer.echo(f"\nFound {len(files_to_process)} files:")
+    typer.echo(f"  Archives: {len(archives)}")
+    typer.echo(f"  3D Models: {len(models)}")
+    
+    if limit > 0:
+        files_to_process = files_to_process[:limit]
+        typer.echo(f"\nProcessing first {limit} files...")
+    
+    if dry_run:
+        typer.echo("\n(Dry run - showing files that would be processed)")
+        for file_path, category in files_to_process[:20]:
+            typer.echo(f"  [{category}] {file_path.name}")
+        if len(files_to_process) > 20:
+            typer.echo(f"  ... and {len(files_to_process) - 20} more")
+        store.close()
+        downloads.close()
+        return
+    
+    typer.echo("\nProcessing...")
+    processed = 0
+    converted = 0
+    skipped = 0
+    failed = 0
+    
+    for file_path, category in files_to_process:
+        # Extract source info from path
+        try:
+            if config.raw_dir in file_path.parents or file_path.parent == config.raw_dir:
+                rel_path = file_path.relative_to(config.raw_dir)
+            else:
+                rel_path = file_path.relative_to(config.extracted_dir)
+            parts = rel_path.parts
+            source = parts[0] if len(parts) > 1 else "local"
+            model_id = parts[1] if len(parts) > 2 else file_path.stem
+        except ValueError:
+            source = "local"
+            model_id = file_path.stem
+        
+        if category == "archive":
+            # Process archive through pipeline
+            typer.echo(f"  📦 {file_path.name}")
+            try:
+                records = pipeline.process_download(
+                    source=source,
+                    model_id=model_id,
+                    file_path=file_path,
+                    name=file_path.stem,
+                )
+                if records:
+                    converted += len(records)
+                    typer.echo(f"     → {len(records)} VRM(s) created")
+                else:
+                    skipped += 1
+                processed += 1
+            except Exception as e:
+                typer.echo(f"     ✗ Error: {e}")
+                failed += 1
+        else:
+            # Convert single model file
+            ext = file_path.suffix.lower()
+            if ext == ".vrm":
+                # Already VRM, just add to database
+                typer.echo(f"  🎭 {file_path.name} (already VRM)")
+                record = pipeline._create_model_record(
+                    vrm_path=file_path,
+                    source=source,
+                    model_id=model_id,
+                    name=file_path.stem,
+                    artist="Unknown",
+                    source_url="",
+                    license_info=None,
+                    thumbnail_path=None,
+                    original_format="vrm",
+                    timestamp=__import__("datetime").datetime.now().isoformat(),
+                )
+                if record:
+                    converted += 1
+                else:
+                    skipped += 1
+                processed += 1
+            else:
+                # Convert to VRM
+                typer.echo(f"  🔄 {file_path.name}")
+                result = pipeline.convert_file(file_path)
+                if result.success and result.output_path:
+                    record = pipeline._create_model_record(
+                        vrm_path=result.output_path,
+                        source=source,
+                        model_id=model_id,
+                        name=file_path.stem,
+                        artist="Unknown",
+                        source_url="",
+                        license_info=None,
+                        thumbnail_path=None,
+                        original_format=result.original_format,
+                        timestamp=__import__("datetime").datetime.now().isoformat(),
+                    )
+                    if record:
+                        converted += 1
+                        typer.echo(f"     → VRM created")
+                    else:
+                        skipped += 1
+                    processed += 1
+                else:
+                    typer.echo(f"     ✗ {result.error or 'Conversion failed'}")
+                    failed += 1
+    
+    store.close()
+    downloads.close()
+    
+    typer.echo(f"\n=== Results ===")
+    typer.echo(f"Processed: {processed}")
+    typer.echo(f"VRMs created: {converted}")
+    typer.echo(f"Skipped (existing): {skipped}")
+    typer.echo(f"Failed: {failed}")
 
 
 if __name__ == "__main__":

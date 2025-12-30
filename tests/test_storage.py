@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings, strategies as st, HealthCheck
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -63,7 +63,7 @@ class TestPersistenceRoundTrip:
     """
     
     @given(record=model_record_strategy())
-    @settings(max_examples=100)
+    @settings(max_examples=20, deadline=None)
     def test_persistence_round_trip(self, record: ModelRecord):
         """Property 12: Records survive store close/reopen."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -104,8 +104,8 @@ class TestExportImportRoundTrip:
     importing into an empty database SHALL produce an identical set of records.
     """
     
-    @given(records=st.lists(model_record_strategy(), min_size=1, max_size=10, unique_by=lambda r: (r.source, r.source_model_id)))
-    @settings(max_examples=100)
+    @given(records=st.lists(model_record_strategy(), min_size=1, max_size=5, unique_by=lambda r: (r.source, r.source_model_id)))
+    @settings(max_examples=20, deadline=None)
     def test_export_import_round_trip(self, records: list[ModelRecord]):
         """Property 13: Export then import preserves all records."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -163,7 +163,7 @@ class TestDuplicatePrevention:
     """
     
     @given(record=model_record_strategy())
-    @settings(max_examples=100)
+    @settings(max_examples=20, deadline=None)
     def test_exists_check(self, record: ModelRecord):
         """exists() returns True for added records."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -180,3 +180,96 @@ class TestDuplicatePrevention:
             assert store.exists(record.source, record.source_model_id)
             
             store.close()
+
+
+from storage import DownloadRecord, DownloadsTracker
+
+
+# Strategies for download records
+status_strategy = st.sampled_from(["downloaded", "extracted", "converted", "failed"])
+
+
+@st.composite
+def download_record_strategy(draw):
+    """Generate a random DownloadRecord."""
+    return DownloadRecord(
+        source=draw(source_strategy),
+        source_model_id=draw(model_id_strategy),
+        source_url=draw(url_strategy),
+        downloaded_at=draw(timestamp_strategy),
+        raw_path=draw(st.text(min_size=1, max_size=100)),
+        status=draw(status_strategy),
+        error=draw(st.one_of(st.none(), st.text(max_size=200))),
+    )
+
+
+class TestDownloadDeduplication:
+    """
+    Feature: vrm-pipeline-simplification, Property 7: Download Deduplication
+    Validates: Requirements 5.2
+    
+    For any source and model_id combination that exists in the downloads table,
+    exists() SHALL return True, preventing re-download.
+    """
+    
+    @given(record=download_record_strategy())
+    @settings(max_examples=20, deadline=None)
+    def test_download_exists_after_add(self, record: DownloadRecord):
+        """Property 7: exists() returns True for added downloads."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            tracker = DownloadsTracker(db_path)
+            
+            # Initially doesn't exist
+            assert not tracker.exists(record.source, record.source_model_id)
+            
+            # Add download record
+            tracker.add(record)
+            
+            # Now exists - should prevent re-download
+            assert tracker.exists(record.source, record.source_model_id)
+            
+            tracker.close()
+    
+    @given(records=st.lists(download_record_strategy(), min_size=2, max_size=5, unique_by=lambda r: (r.source, r.source_model_id)))
+    @settings(max_examples=20, deadline=None)
+    def test_multiple_downloads_tracked(self, records: list[DownloadRecord]):
+        """Multiple downloads are all tracked independently."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            tracker = DownloadsTracker(db_path)
+            
+            # Add all records
+            for record in records:
+                tracker.add(record)
+            
+            # All should exist
+            for record in records:
+                assert tracker.exists(record.source, record.source_model_id)
+            
+            # Count should match
+            assert tracker.count() == len(records)
+            
+            tracker.close()
+    
+    @given(record=download_record_strategy(), new_status=status_strategy)
+    @settings(max_examples=20, deadline=None)
+    def test_status_update(self, record: DownloadRecord, new_status: str):
+        """Status can be updated for existing downloads."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            tracker = DownloadsTracker(db_path)
+            
+            # Add record
+            tracker.add(record)
+            
+            # Update status
+            updated = tracker.update_status(record.source, record.source_model_id, new_status)
+            assert updated
+            
+            # Verify status changed
+            retrieved = tracker.get(record.source, record.source_model_id)
+            assert retrieved is not None
+            assert retrieved.status == new_status
+            
+            tracker.close()

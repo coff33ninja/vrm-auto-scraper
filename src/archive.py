@@ -6,6 +6,10 @@ import subprocess
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from classifier import ItemClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +35,84 @@ def find_7zip() -> str | None:
 
 
 SEVEN_ZIP_PATH = find_7zip()
+
+
+# Keywords that indicate a file is an accessory (not a full avatar model)
+ACCESSORY_KEYWORDS = [
+    "accessory", "accessories", "props", "prop",
+    "weapon", "weapons", "item", "items",
+    "clothing", "clothes", "outfit", "costume",
+    "hair", "wig",  # Standalone hair models
+    "stage", "background", "scene", "environment",
+    "effect", "effects", "particle",
+]
+
+# File extensions that should always be skipped
+SKIP_EXTENSIONS = {".pmx", ".pmd"}  # MMD formats - typically accessories
+
+# Global classifier instance (lazy-loaded)
+_classifier: "ItemClassifier | None" = None
+
+
+def get_classifier() -> "ItemClassifier | None":
+    """Get or create the global classifier instance."""
+    global _classifier
+    if _classifier is None:
+        try:
+            from classifier import ItemClassifier
+            from config import config
+            _classifier = ItemClassifier(
+                db_path=config.db_path,
+                clip_threshold=config.clip_threshold,
+                text_threshold=config.text_threshold,
+                fuzzy_threshold=config.fuzzy_threshold,
+                enable_ai=config.enable_ai_classification,
+            )
+            logger.info("AI classifier initialized")
+        except ImportError as e:
+            logger.warning(f"AI classifier not available: {e}")
+            return None
+    return _classifier
+
+
+def is_skippable(
+    file_path: Path,
+    thumbnail_path: Path | None = None,
+    use_ai: bool = True,
+) -> tuple[bool, str]:
+    """
+    Check if a file should be skipped during conversion.
+    
+    Uses AI classification if available, falls back to keyword matching.
+    
+    Args:
+        file_path: Path to the file to check
+        thumbnail_path: Optional path to thumbnail for AI classification
+        use_ai: Whether to use AI classification (default True)
+        
+    Returns:
+        Tuple of (should_skip, reason)
+    """
+    # Check extension first (always skip PMX/PMD)
+    ext = file_path.suffix.lower()
+    if ext in SKIP_EXTENSIONS:
+        return True, "pmx_format"
+    
+    # Try AI classification if enabled
+    if use_ai:
+        classifier = get_classifier()
+        if classifier:
+            result = classifier.classify(file_path, thumbnail_path)
+            if result.should_skip:
+                return True, f"ai:{result.category}:{result.confidence:.2f}"
+    
+    # Fallback to keyword matching
+    path_lower = str(file_path).lower()
+    for keyword in ACCESSORY_KEYWORDS:
+        if keyword in path_lower:
+            return True, f"accessory_keyword:{keyword}"
+    
+    return False, ""
 
 
 @dataclass

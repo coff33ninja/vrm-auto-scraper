@@ -7,6 +7,19 @@ from typing import Optional
 
 
 @dataclass
+class DownloadRecord:
+    """Tracks downloaded files to prevent re-downloading."""
+    source: str
+    source_model_id: str
+    source_url: str
+    downloaded_at: str
+    raw_path: str
+    status: str  # "downloaded", "extracted", "converted", "failed"
+    error: str | None = None
+    id: int | None = None
+
+
+@dataclass
 class ModelRecord:
     """Represents a downloaded model's metadata."""
     source: str
@@ -22,6 +35,7 @@ class ModelRecord:
     license_url: Optional[str] = None
     thumbnail_path: Optional[str] = None
     notes: Optional[dict] = None
+    original_format: Optional[str] = None  # Original format before conversion (fbx, blend, etc.)
     id: Optional[int] = None
     
     def to_dict(self) -> dict:
@@ -49,6 +63,7 @@ class ModelRecord:
             file_type=data["file_type"],
             size_bytes=data["size_bytes"],
             notes=data.get("notes") or {},
+            original_format=data.get("original_format"),
         )
 
 
@@ -103,6 +118,11 @@ class MetadataStore:
             con.execute("ALTER TABLE models ADD COLUMN thumbnail_path TEXT")
         except sqlite3.OperationalError:
             pass  # Column already exists
+        # Add original_format column if it doesn't exist (migration)
+        try:
+            con.execute("ALTER TABLE models ADD COLUMN original_format TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         con.commit()
     
     def add(self, record: ModelRecord) -> int:
@@ -112,8 +132,8 @@ class MetadataStore:
             INSERT INTO models
             (source, source_model_id, name, artist, source_url,
              license, license_url, thumbnail_path, acquired_at, file_path,
-             file_type, size_bytes, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             file_type, size_bytes, notes, original_format)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record.source,
             record.source_model_id,
@@ -128,6 +148,7 @@ class MetadataStore:
             record.file_type,
             record.size_bytes,
             json.dumps(record.notes or {}),
+            record.original_format,
         ))
         con.commit()
         return cursor.lastrowid
@@ -187,6 +208,7 @@ class MetadataStore:
             file_type=row["file_type"],
             size_bytes=row["size_bytes"],
             notes=notes or {},
+            original_format=row.get("original_format"),
         )
 
     def export_json(self, path: Path) -> None:
@@ -224,3 +246,132 @@ class MetadataStore:
         cursor = con.execute("DELETE FROM models")
         con.commit()
         return cursor.rowcount
+
+
+class DownloadsTracker:
+    """Tracks downloaded files to prevent re-downloading."""
+    
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._connection: Optional[sqlite3.Connection] = None
+        self._init_db()
+    
+    def _conn(self) -> sqlite3.Connection:
+        """Get or create database connection."""
+        if self._connection is None:
+            self._connection = sqlite3.connect(self.db_path)
+        return self._connection
+    
+    def close(self) -> None:
+        """Close the database connection."""
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+    
+    def _init_db(self) -> None:
+        """Initialize downloads table."""
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        con = self._conn()
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS downloads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                source_model_id TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                downloaded_at TEXT NOT NULL,
+                raw_path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT,
+                UNIQUE(source, source_model_id)
+            )
+        """)
+        con.execute("CREATE INDEX IF NOT EXISTS idx_downloads_source ON downloads(source)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)")
+        con.commit()
+    
+    def add(self, record: DownloadRecord) -> int:
+        """Insert a download record. Returns the record ID."""
+        con = self._conn()
+        cursor = con.execute("""
+            INSERT INTO downloads
+            (source, source_model_id, source_url, downloaded_at, raw_path, status, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            record.source,
+            record.source_model_id,
+            record.source_url,
+            record.downloaded_at,
+            record.raw_path,
+            record.status,
+            record.error,
+        ))
+        con.commit()
+        return cursor.lastrowid
+    
+    def exists(self, source: str, source_model_id: str) -> bool:
+        """Check if a download already exists."""
+        con = self._conn()
+        cursor = con.execute(
+            "SELECT 1 FROM downloads WHERE source = ? AND source_model_id = ?",
+            (source, source_model_id)
+        )
+        return cursor.fetchone() is not None
+    
+    def get(self, source: str, source_model_id: str) -> DownloadRecord | None:
+        """Get a download record by source and model ID."""
+        con = self._conn()
+        con.row_factory = sqlite3.Row
+        cursor = con.execute(
+            "SELECT * FROM downloads WHERE source = ? AND source_model_id = ?",
+            (source, source_model_id)
+        )
+        row = cursor.fetchone()
+        con.row_factory = None
+        if row:
+            return DownloadRecord(
+                id=row["id"],
+                source=row["source"],
+                source_model_id=row["source_model_id"],
+                source_url=row["source_url"],
+                downloaded_at=row["downloaded_at"],
+                raw_path=row["raw_path"],
+                status=row["status"],
+                error=row["error"],
+            )
+        return None
+    
+    def update_status(self, source: str, source_model_id: str, status: str, error: str | None = None) -> bool:
+        """Update the status of a download. Returns True if updated."""
+        con = self._conn()
+        cursor = con.execute(
+            "UPDATE downloads SET status = ?, error = ? WHERE source = ? AND source_model_id = ?",
+            (status, error, source, source_model_id)
+        )
+        con.commit()
+        return cursor.rowcount > 0
+    
+    def list_by_status(self, status: str) -> list[DownloadRecord]:
+        """List all downloads with a given status."""
+        con = self._conn()
+        con.row_factory = sqlite3.Row
+        cursor = con.execute("SELECT * FROM downloads WHERE status = ?", (status,))
+        results = []
+        for row in cursor.fetchall():
+            results.append(DownloadRecord(
+                id=row["id"],
+                source=row["source"],
+                source_model_id=row["source_model_id"],
+                source_url=row["source_url"],
+                downloaded_at=row["downloaded_at"],
+                raw_path=row["raw_path"],
+                status=row["status"],
+                error=row["error"],
+            ))
+        con.row_factory = None
+        return results
+    
+    def count(self) -> int:
+        """Return total number of download records."""
+        con = self._conn()
+        cursor = con.execute("SELECT COUNT(*) FROM downloads")
+        return cursor.fetchone()[0]

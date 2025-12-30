@@ -32,6 +32,15 @@ class Config:
         self.rate_limit_delay: float = float(os.getenv("RATE_LIMIT_DELAY", "1.0"))
         self.data_dir: Path = Path(os.getenv("DATA_DIR", "./data"))
         
+        # AI Classification settings
+        self.clip_threshold: float = float(os.getenv("CLIP_THRESHOLD", "0.7"))
+        self.text_threshold: float = float(os.getenv("TEXT_THRESHOLD", "0.6"))
+        self.fuzzy_threshold: int = int(os.getenv("FUZZY_THRESHOLD", "80"))
+        self.enable_ai_classification: bool = os.getenv("ENABLE_AI_CLASSIFICATION", "true").lower() == "true"
+        self.skip_categories: list[str] = self._parse_skip_categories(
+            os.getenv("SKIP_CATEGORIES", "weapon,prop,accessory,stage,clothing,background")
+        )
+        
         # Ensure data directories exist
         self.raw_dir = self.data_dir / "raw"
         self.extracted_dir = self.data_dir / "extracted"
@@ -111,6 +120,10 @@ class Config:
             self.deviantart_refresh_token = tokens.get("refresh_token", "")
         except (json.JSONDecodeError, IOError):
             pass  # Ignore invalid token file
+    
+    def _parse_skip_categories(self, categories_str: str) -> list[str]:
+        """Parse comma-separated skip categories from env var."""
+        return [c.strip().lower() for c in categories_str.split(",") if c.strip()]
 
 
 # Global config instance
