@@ -1,0 +1,48 @@
+# Environment and secrets
+.env
+.vroid_tokens.json
+*.json.credentials
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+.eggs/
+*.egg-info/
+*.egg
+
+# Testing
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Data (large files)
+data/raw/
+data/extracted/
+data/models.db
+*.vrm
+*.glb
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Kiro
+.kiro/
+
+# OS
+.DS_Store
+Thumbs.db
